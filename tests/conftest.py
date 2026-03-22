@@ -42,20 +42,22 @@ def test_video_long(tmp_path_factory):
     """Generate a 120s synthetic video for chunking tests.
 
     Uses color source changes to create detectable scene boundaries.
+    Avoids drawtext filter (requires libfreetype which may not be available).
     """
     video_dir = tmp_path_factory.mktemp("videos_long")
     video_path = video_dir / "test_long.mp4"
-    # Create video with color changes every ~20-35s to simulate scenes
+    # Create video with abrupt color changes to simulate scene boundaries.
+    # Pure color sources always available -- no drawtext filter needed.
     cmd = [
         "ffmpeg", "-y",
         "-f", "lavfi", "-i",
-        "color=c=red:duration=25:size=1920x1080:rate=30,drawtext=text='Scene1':fontsize=72:fontcolor=white:x=100:y=100",
+        "color=c=red:duration=25:size=1920x1080:rate=30",
         "-f", "lavfi", "-i",
-        "color=c=blue:duration=35:size=1920x1080:rate=30,drawtext=text='Scene2':fontsize=72:fontcolor=white:x=100:y=100",
+        "color=c=blue:duration=35:size=1920x1080:rate=30",
         "-f", "lavfi", "-i",
-        "color=c=green:duration=30:size=1920x1080:rate=30,drawtext=text='Scene3':fontsize=72:fontcolor=white:x=100:y=100",
+        "color=c=green:duration=30:size=1920x1080:rate=30",
         "-f", "lavfi", "-i",
-        "color=c=yellow:duration=30:size=1920x1080:rate=30,drawtext=text='Scene4':fontsize=72:fontcolor=white:x=100:y=100",
+        "color=c=yellow:duration=30:size=1920x1080:rate=30",
         "-f", "lavfi", "-i",
         "sine=frequency=440:duration=120",
         "-filter_complex",
