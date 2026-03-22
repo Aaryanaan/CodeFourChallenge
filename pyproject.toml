@@ -1,0 +1,20 @@
+[project]
+name = "videosearch"
+version = "0.1.0"
+description = "Natural language search for body-worn camera footage"
+requires-python = ">=3.13"
+dependencies = [
+    "pydantic>=2.12",
+    "pydantic-settings>=2.13",
+    "scenedetect[opencv]>=0.6.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
