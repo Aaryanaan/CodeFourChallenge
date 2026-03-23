@@ -74,17 +74,17 @@ class TestDeduplicateOcr:
         assert len(results) == 2
 
     def test_fuzzy_deduplication(self):
-        """Similar strings (e.g., OCR misread) should be merged."""
+        """Similar strings (e.g., OCR misread) should be merged when similarity >= 0.85."""
         frame_results = [
-            {"text": "ABC123", "confidence": 0.9, "timestamp": 2.0,
+            {"text": "ABC1234", "confidence": 0.9, "timestamp": 2.0,
              "bbox": [[0, 0], [100, 0], [100, 30], [0, 30]]},
-            {"text": "ABC12B", "confidence": 0.75, "timestamp": 4.0,
+            {"text": "ABC12B4", "confidence": 0.75, "timestamp": 4.0,
              "bbox": [[0, 0], [100, 0], [100, 30], [0, 30]]},
         ]
         results = deduplicate_ocr(frame_results)
         assert len(results) == 1
         # Higher confidence version kept
-        assert results[0]["text"] == "ABC123"
+        assert results[0]["text"] == "ABC1234"
         assert results[0]["confidence"] == 0.9
 
     def test_empty_input(self):
@@ -113,18 +113,28 @@ class TestPaddleOCRExtractorExtract:
         cap.release = MagicMock()
         return cap
 
+    def _make_paddle_mock(self, texts, scores, polys):
+        """Create a mock PaddleOCR engine that returns given results on each predict() call."""
+        mock_engine = MagicMock()
+
+        def make_result():
+            mock_result = MagicMock()
+            mock_result.rec_texts = texts
+            mock_result.rec_scores = scores
+            mock_result.rec_polys = polys
+            return mock_result
+
+        mock_engine.predict = MagicMock(side_effect=lambda frame: iter([make_result()]))
+        return mock_engine
+
     def test_extract_returns_dict_with_results_key(self):
         extractor = PaddleOCRExtractor(confidence_threshold=0.7, frame_interval=2.0)
         mock_cap = self._make_mock_capture(frame_count=2)
 
-        # Mock PaddleOCR engine
-        mock_result = MagicMock()
-        mock_result.rec_texts = ["HELLO"]
-        mock_result.rec_scores = [0.95]
-        mock_result.rec_polys = [np.array([[0, 0], [100, 0], [100, 30], [0, 30]])]
-
-        mock_engine = MagicMock()
-        mock_engine.predict = MagicMock(return_value=iter([mock_result]))
+        mock_engine = self._make_paddle_mock(
+            ["HELLO"], [0.95],
+            [np.array([[0, 0], [100, 0], [100, 30], [0, 30]])]
+        )
 
         extractor._engine = mock_engine
         extractor._backend = "paddleocr"
@@ -140,13 +150,10 @@ class TestPaddleOCRExtractorExtract:
         extractor = PaddleOCRExtractor(confidence_threshold=0.7, frame_interval=2.0)
         mock_cap = self._make_mock_capture(frame_count=1)
 
-        mock_result = MagicMock()
-        mock_result.rec_texts = ["PLATE42"]
-        mock_result.rec_scores = [0.92]
-        mock_result.rec_polys = [np.array([[10, 10], [110, 10], [110, 40], [10, 40]])]
-
-        mock_engine = MagicMock()
-        mock_engine.predict = MagicMock(return_value=iter([mock_result]))
+        mock_engine = self._make_paddle_mock(
+            ["PLATE42"], [0.92],
+            [np.array([[10, 10], [110, 10], [110, 40], [10, 40]])]
+        )
 
         extractor._engine = mock_engine
         extractor._backend = "paddleocr"
@@ -168,16 +175,13 @@ class TestPaddleOCRExtractorExtract:
         extractor = PaddleOCRExtractor(confidence_threshold=0.7, frame_interval=2.0)
         mock_cap = self._make_mock_capture(frame_count=1)
 
-        mock_result = MagicMock()
-        mock_result.rec_texts = ["CLEAR", "FUZZY"]
-        mock_result.rec_scores = [0.95, 0.3]
-        mock_result.rec_polys = [
-            np.array([[0, 0], [100, 0], [100, 30], [0, 30]]),
-            np.array([[200, 0], [300, 0], [300, 30], [200, 30]]),
-        ]
-
-        mock_engine = MagicMock()
-        mock_engine.predict = MagicMock(return_value=iter([mock_result]))
+        mock_engine = self._make_paddle_mock(
+            ["CLEAR", "FUZZY"], [0.95, 0.3],
+            [
+                np.array([[0, 0], [100, 0], [100, 30], [0, 30]]),
+                np.array([[200, 0], [300, 0], [300, 30], [200, 30]]),
+            ]
+        )
 
         extractor._engine = mock_engine
         extractor._backend = "paddleocr"
@@ -195,13 +199,10 @@ class TestPaddleOCRExtractorExtract:
         extractor = PaddleOCRExtractor(confidence_threshold=0.7, frame_interval=2.0)
         mock_cap = self._make_mock_capture(frame_count=3)
 
-        mock_result = MagicMock()
-        mock_result.rec_texts = ["STOP"]
-        mock_result.rec_scores = [0.9]
-        mock_result.rec_polys = [np.array([[0, 0], [80, 0], [80, 25], [0, 25]])]
-
-        mock_engine = MagicMock()
-        mock_engine.predict = MagicMock(return_value=iter([mock_result]))
+        mock_engine = self._make_paddle_mock(
+            ["STOP"], [0.9],
+            [np.array([[0, 0], [80, 0], [80, 25], [0, 25]])]
+        )
 
         extractor._engine = mock_engine
         extractor._backend = "paddleocr"
@@ -219,13 +220,7 @@ class TestPaddleOCRExtractorExtract:
         extractor = PaddleOCRExtractor(confidence_threshold=0.7, frame_interval=2.0)
         mock_cap = self._make_mock_capture(frame_count=2)
 
-        mock_result = MagicMock()
-        mock_result.rec_texts = []
-        mock_result.rec_scores = []
-        mock_result.rec_polys = []
-
-        mock_engine = MagicMock()
-        mock_engine.predict = MagicMock(return_value=iter([mock_result]))
+        mock_engine = self._make_paddle_mock([], [], [])
 
         extractor._engine = mock_engine
         extractor._backend = "paddleocr"
@@ -267,13 +262,7 @@ class TestPaddleOCRExtractorExtract:
         extractor = PaddleOCRExtractor(confidence_threshold=0.7, frame_interval=2.0)
         mock_cap = self._make_mock_capture(frame_count=3)
 
-        mock_result = MagicMock()
-        mock_result.rec_texts = []
-        mock_result.rec_scores = []
-        mock_result.rec_polys = []
-
-        mock_engine = MagicMock()
-        mock_engine.predict = MagicMock(return_value=iter([mock_result]))
+        mock_engine = self._make_paddle_mock([], [], [])
 
         extractor._engine = mock_engine
         extractor._backend = "paddleocr"
