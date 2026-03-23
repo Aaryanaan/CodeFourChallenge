@@ -83,3 +83,36 @@ def test_pyscenedetect_config_from_env(monkeypatch):
     assert settings.chunk_max_duration == 90.0
     assert settings.sliding_window_size == 45.0
     assert settings.sliding_window_overlap == 15.0
+
+
+# --- Extraction settings tests ---
+
+
+def test_settings_whisper_model_default():
+    """Settings has whisper_model field defaulting to 'large-v3'."""
+    settings = Settings(_env_file=None)
+    assert settings.whisper_model == "large-v3"
+
+
+def test_settings_ocr_confidence_threshold_default():
+    """Settings has ocr_confidence_threshold field defaulting to 0.7."""
+    settings = Settings(_env_file=None)
+    assert settings.ocr_confidence_threshold == 0.7
+
+
+def test_settings_raised_voice_stddev_threshold_default():
+    """Settings has raised_voice_stddev_threshold field defaulting to 2.0."""
+    settings = Settings(_env_file=None)
+    assert settings.raised_voice_stddev_threshold == 2.0
+
+
+def test_settings_whisper_compute_type_default():
+    """Settings has whisper_compute_type field defaulting to 'auto'."""
+    settings = Settings(_env_file=None)
+    assert settings.whisper_compute_type == "auto"
+
+
+def test_settings_ocr_frame_interval_default():
+    """Settings has ocr_frame_interval field defaulting to 2.0."""
+    settings = Settings(_env_file=None)
+    assert settings.ocr_frame_interval == 2.0
