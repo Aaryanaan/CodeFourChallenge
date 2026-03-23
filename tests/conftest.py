@@ -1,7 +1,12 @@
+import os
 import subprocess
 
+import cv2
+import numpy as np
 import pytest
 from pathlib import Path
+
+from videosearch.audio_utils import extract_audio_segment
 
 
 @pytest.fixture
@@ -69,3 +74,45 @@ def test_video_long(tmp_path_factory):
     ]
     subprocess.run(cmd, check=True, capture_output=True)
     return str(video_path)
+
+
+@pytest.fixture(scope="session")
+def test_audio_wav(test_video):
+    """Extract a mono 16kHz WAV from first 5s of test_video.
+
+    Session-scoped for reuse across tests. Cleans up in finalizer.
+    """
+    wav_path = extract_audio_segment(test_video, 0.0, 5.0)
+    yield wav_path
+    os.unlink(wav_path)
+
+
+@pytest.fixture(scope="session")
+def test_frame_with_text(tmp_path_factory):
+    """Create a 640x480 white PNG image with black text 'TEST123'.
+
+    Uses OpenCV cv2.putText for text rendering.
+    """
+    frame_dir = tmp_path_factory.mktemp("frames")
+    frame_path = frame_dir / "text_frame.png"
+    # White background
+    img = np.ones((480, 640, 3), dtype=np.uint8) * 255
+    # Black text
+    cv2.putText(
+        img, "TEST123",
+        (100, 250),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        2.0, (0, 0, 0), 3,
+    )
+    cv2.imwrite(str(frame_path), img)
+    return str(frame_path)
+
+
+@pytest.fixture(scope="session")
+def test_frame_no_text(tmp_path_factory):
+    """Create a 640x480 solid black PNG image (no text)."""
+    frame_dir = tmp_path_factory.mktemp("frames_blank")
+    frame_path = frame_dir / "blank_frame.png"
+    img = np.zeros((480, 640, 3), dtype=np.uint8)
+    cv2.imwrite(str(frame_path), img)
+    return str(frame_path)

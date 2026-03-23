@@ -41,3 +41,10 @@ class Settings(BaseSettings):
     captioner_model: str = "google/gemini-2.5-flash"
     reranker_model: str = "anthropic/claude-sonnet-4"
     embedder_model: str = "text-embedding-004"
+
+    # Extraction settings
+    whisper_model: str = "large-v3"  # faster-whisper model size
+    whisper_compute_type: str = "auto"  # auto selects best for platform
+    ocr_confidence_threshold: float = 0.7  # minimum PaddleOCR confidence
+    raised_voice_stddev_threshold: float = 2.0  # RMS std devs above mean
+    ocr_frame_interval: float = 2.0  # seconds between OCR frame samples
