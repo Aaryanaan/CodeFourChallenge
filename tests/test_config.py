@@ -32,6 +32,8 @@ def test_settings_defaults():
     assert settings.captioner_model == "google/gemini-2.5-flash"
     assert settings.reranker_model == "anthropic/claude-sonnet-4"
     assert settings.embedder_model == "gemini-embedding-001"
+
+    # Embedding settings
     assert settings.embedding_dimensions == 768
     assert settings.embedding_batch_size == 50
 

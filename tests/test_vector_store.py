@@ -1,122 +1,119 @@
-"""Tests for LanceVectorStore (IDX-02, IDX-04)."""
+"""Tests for LanceVectorStore (IDX-02, IDX-04).
+
+All tests use tmp_path for isolated LanceDB directories.
+"""
+
 import pytest
 
-from videosearch.vector_store import LanceVectorStore
-
-VECTOR_DIM = 768
+from videosearch.protocols import VectorStore
+from videosearch.vector_store import CHUNKS_SCHEMA, VECTOR_DIM, LanceVectorStore
 
 
 @pytest.fixture
 def store(tmp_path):
+    """LanceVectorStore backed by a temporary directory."""
     return LanceVectorStore(index_dir=tmp_path)
 
 
-@pytest.fixture
-def sample_row():
-    return {
-        "vector": [0.1] * VECTOR_DIM,
-        "video_id": "vid_001",
-        "chunk_index": 0,
+def _make_row(video_id="vid_001", chunk_index=0, **overrides):
+    """Helper to build a valid row dict."""
+    row = {
+        "vector": [float(chunk_index * 0.1 + 1.0 + i * 0.01) for i in range(VECTOR_DIM)],
+        "video_id": video_id,
+        "chunk_index": chunk_index,
         "start_time": 0.0,
         "end_time": 30.0,
         "duration": 30.0,
-        "combined_text": "Transcript: hello world\nOCR: STOP",
+        "combined_text": "test text",
         "volume_level": "normal",
         "has_speech": True,
-        "has_ocr": True,
+        "has_ocr": False,
         "has_raised_voice": False,
-        "scene_type": "detected",
+        "scene_type": "action",
     }
+    row.update(overrides)
+    return row
 
 
 def test_table_schema(store):
+    """Table schema has all required columns."""
     table = store._get_table()
     schema = table.schema
-    field_names = [f.name for f in schema]
-    assert "vector" in field_names
-    assert "video_id" in field_names
-    assert "chunk_index" in field_names
-    assert "volume_level" in field_names
-    assert "has_speech" in field_names
-    assert "has_ocr" in field_names
-    assert "has_raised_voice" in field_names
-    assert "duration" in field_names
+    expected_columns = [
+        "vector", "video_id", "chunk_index", "volume_level",
+        "has_speech", "has_ocr", "has_raised_voice", "duration",
+    ]
+    column_names = [f.name for f in schema]
+    for col in expected_columns:
+        assert col in column_names, f"Missing column: {col}"
 
 
-def test_upsert_roundtrip(store, sample_row):
-    store.upsert([sample_row])
-    store.upsert([sample_row])  # Re-upsert same row
-    results = store.search(sample_row["vector"], top_k=10)
-    # Should have exactly 1 row (upsert replaced, not duplicated)
-    matching = [r for r in results if r["video_id"] == "vid_001" and r["chunk_index"] == 0]
+def test_upsert_roundtrip(store):
+    """Upserting same row twice yields 1 row not 2 (compound key)."""
+    row = _make_row(video_id="vid_001", chunk_index=0, combined_text="first")
+    store.upsert([row])
+
+    row_updated = _make_row(video_id="vid_001", chunk_index=0, combined_text="second")
+    store.upsert([row_updated])
+
+    table = store._get_table()
+    df = table.to_pandas()
+    matching = df[(df["video_id"] == "vid_001") & (df["chunk_index"] == 0)]
     assert len(matching) == 1
+    assert matching.iloc[0]["combined_text"] == "second"
 
 
-def test_search_returns_results(store, sample_row):
-    store.upsert([sample_row])
-    results = store.search(sample_row["vector"], top_k=5)
-    assert len(results) >= 1
+def test_search_returns_results(store):
+    """search returns dicts with _distance key."""
+    rows = [_make_row(chunk_index=i) for i in range(3)]
+    store.upsert(rows)
+
+    query_vector = [1.0] * VECTOR_DIM
+    results = store.search(query_vector, top_k=3)
+    assert len(results) > 0
     assert "_distance" in results[0]
-    assert results[0]["video_id"] == "vid_001"
 
 
 def test_filter_by_raised_voice(store):
-    row_calm = {
-        "vector": [0.1] * VECTOR_DIM,
-        "video_id": "vid_001", "chunk_index": 0,
-        "start_time": 0.0, "end_time": 30.0, "duration": 30.0,
-        "combined_text": "calm speech",
-        "volume_level": "normal", "has_speech": True,
-        "has_ocr": False, "has_raised_voice": False, "scene_type": "detected",
-    }
-    row_loud = {
-        "vector": [0.2] * VECTOR_DIM,
-        "video_id": "vid_001", "chunk_index": 1,
-        "start_time": 30.0, "end_time": 60.0, "duration": 30.0,
-        "combined_text": "loud speech",
-        "volume_level": "loud", "has_speech": True,
-        "has_ocr": False, "has_raised_voice": True, "scene_type": "detected",
-    }
-    store.upsert([row_calm, row_loud])
-    results = store.search(
-        [0.2] * VECTOR_DIM, top_k=10,
-        filter_expr="has_raised_voice = true",
-    )
+    """search with filter_expr='has_raised_voice = true' only returns matching rows."""
+    rows = [
+        _make_row(chunk_index=0, has_raised_voice=True),
+        _make_row(chunk_index=1, has_raised_voice=False),
+        _make_row(chunk_index=2, has_raised_voice=True),
+    ]
+    store.upsert(rows)
+
+    query_vector = [1.0] * VECTOR_DIM
+    results = store.search(query_vector, top_k=10, filter_expr="has_raised_voice = true")
+    assert len(results) == 2
     assert all(r["has_raised_voice"] for r in results)
 
 
 def test_filter_by_duration(store):
-    short = {
-        "vector": [0.1] * VECTOR_DIM,
-        "video_id": "vid_001", "chunk_index": 0,
-        "start_time": 0.0, "end_time": 10.0, "duration": 10.0,
-        "combined_text": "short",
-        "volume_level": "normal", "has_speech": True,
-        "has_ocr": False, "has_raised_voice": False, "scene_type": "detected",
-    }
-    long_chunk = {
-        "vector": [0.2] * VECTOR_DIM,
-        "video_id": "vid_001", "chunk_index": 1,
-        "start_time": 10.0, "end_time": 55.0, "duration": 45.0,
-        "combined_text": "long chunk",
-        "volume_level": "normal", "has_speech": True,
-        "has_ocr": False, "has_raised_voice": False, "scene_type": "detected",
-    }
-    store.upsert([short, long_chunk])
-    results = store.search(
-        [0.2] * VECTOR_DIM, top_k=10,
-        filter_expr="duration >= 30.0",
-    )
+    """search with filter_expr='duration >= 30.0' only returns matching rows."""
+    rows = [
+        _make_row(chunk_index=0, duration=15.0),
+        _make_row(chunk_index=1, duration=30.0),
+        _make_row(chunk_index=2, duration=45.0),
+    ]
+    store.upsert(rows)
+
+    query_vector = [1.0] * VECTOR_DIM
+    results = store.search(query_vector, top_k=10, filter_expr="duration >= 30.0")
+    assert len(results) == 2
     assert all(r["duration"] >= 30.0 for r in results)
 
 
-def test_search_with_no_filter(store, sample_row):
-    store.upsert([sample_row])
-    results = store.search(sample_row["vector"], top_k=5)
-    assert len(results) >= 1
+def test_search_with_no_filter(store):
+    """search without filter returns all rows."""
+    rows = [_make_row(chunk_index=i) for i in range(3)]
+    store.upsert(rows)
+
+    query_vector = [1.0] * VECTOR_DIM
+    results = store.search(query_vector, top_k=10)
+    assert len(results) == 3
 
 
-def test_vector_store_satisfies_protocol(tmp_path):
-    from videosearch.protocols import VectorStore
-    vs = LanceVectorStore(index_dir=tmp_path)
-    assert isinstance(vs, VectorStore)
+def test_vector_store_satisfies_protocol(store):
+    """isinstance(store, VectorStore) is True."""
+    assert isinstance(store, VectorStore)
