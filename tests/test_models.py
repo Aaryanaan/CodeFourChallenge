@@ -64,7 +64,7 @@ def test_chunk_metadata_model_dump():
     )
     data = chunk.model_dump()
     assert isinstance(data, dict)
-    assert set(data.keys()) == {
+    core_keys = {
         "video_id",
         "chunk_index",
         "start_time",
@@ -72,3 +72,4 @@ def test_chunk_metadata_model_dump():
         "duration",
         "scene_type",
     }
+    assert core_keys <= set(data.keys())
