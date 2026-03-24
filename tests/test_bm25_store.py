@@ -43,39 +43,34 @@ def _make_chunk(
 class TestBM25Store:
     """BM25Store test suite."""
 
-    def test_build_skips_silent(self):
-        """build() with 3 chunks (2 have transcript, 1 silent) yields _corpus_size == 2."""
-        chunks = [
+    @pytest.fixture()
+    def sample_chunks(self):
+        """Corpus with 4 chunks: 0 and 2 mention Miranda rights, 1 silent, 3 unrelated."""
+        return [
             _make_chunk("v1", 0, ["The officer read Miranda rights to the suspect"]),
             _make_chunk("v1", 1, None),  # silent — no transcript
             _make_chunk("v1", 2, ["Miranda rights were read again at the scene"]),
+            _make_chunk("v1", 3, ["The vehicle was stopped at the intersection"]),
         ]
-        store = BM25Store()
-        store.build(chunks)
-        assert store._corpus_size == 2
 
-    def test_search_phrase(self):
-        """search('Miranda rights') returns chunks 0 and 2 which contain that phrase."""
-        chunks = [
-            _make_chunk("v1", 0, ["The officer read Miranda rights to the suspect"]),
-            _make_chunk("v1", 1, None),  # silent
-            _make_chunk("v1", 2, ["Miranda rights were read again at the scene"]),
-        ]
+    def test_build_skips_silent(self, sample_chunks):
+        """build() with 4 chunks (3 have transcript, 1 silent) yields _corpus_size == 3."""
         store = BM25Store()
-        store.build(chunks)
+        store.build(sample_chunks)
+        assert store._corpus_size == 3
+
+    def test_search_phrase(self, sample_chunks):
+        """search('Miranda rights') returns chunks 0 and 2 which contain that phrase."""
+        store = BM25Store()
+        store.build(sample_chunks)
         results = store.search("Miranda rights")
         result_indices = {r["chunk_index"] for r in results}
         assert result_indices == {0, 2}
 
-    def test_pickle_roundtrip(self, tmp_path):
+    def test_pickle_roundtrip(self, sample_chunks, tmp_path):
         """save then load produces identical search results."""
-        chunks = [
-            _make_chunk("v1", 0, ["The officer read Miranda rights to the suspect"]),
-            _make_chunk("v1", 1, None),
-            _make_chunk("v1", 2, ["Miranda rights were read again at the scene"]),
-        ]
         store = BM25Store()
-        store.build(chunks)
+        store.build(sample_chunks)
         original_results = store.search("Miranda rights")
 
         pkl_path = tmp_path / "bm25.pkl"
@@ -87,25 +82,19 @@ class TestBM25Store:
 
         assert loaded_results == original_results
 
-    def test_search_returns_scores(self):
+    def test_search_returns_scores(self, sample_chunks):
         """Results have 'score' key with value > 0."""
-        chunks = [
-            _make_chunk("v1", 0, ["The officer read Miranda rights to the suspect"]),
-        ]
         store = BM25Store()
-        store.build(chunks)
+        store.build(sample_chunks)
         results = store.search("Miranda rights")
         assert len(results) > 0
         for r in results:
             assert "score" in r
             assert r["score"] > 0
 
-    def test_search_no_match_returns_empty(self):
+    def test_search_no_match_returns_empty(self, sample_chunks):
         """Search for non-existent word returns []."""
-        chunks = [
-            _make_chunk("v1", 0, ["The officer read Miranda rights to the suspect"]),
-        ]
         store = BM25Store()
-        store.build(chunks)
+        store.build(sample_chunks)
         results = store.search("xylophone")
         assert results == []

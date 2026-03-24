@@ -64,11 +64,6 @@ def test_chunk_metadata_model_dump():
     )
     data = chunk.model_dump()
     assert isinstance(data, dict)
-    assert set(data.keys()) == {
-        "video_id",
-        "chunk_index",
-        "start_time",
-        "end_time",
-        "duration",
-        "scene_type",
-    }
+    # Check core keys are present (optional extraction fields may also exist)
+    core_keys = {"video_id", "chunk_index", "start_time", "end_time", "duration", "scene_type"}
+    assert core_keys <= set(data.keys())
