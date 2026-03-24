@@ -26,7 +26,18 @@ class MetadataWriter:
 
         Creates metadata_dir if it does not exist.
         Returns path to written file.
+
+        Raises ValueError if any chunk's video_id does not match the
+        given video_id, preventing silent cross-video contamination.
         """
+        mismatched = [
+            c.chunk_index for c in chunks if c.video_id != video_id
+        ]
+        if mismatched:
+            raise ValueError(
+                f"Chunk(s) {mismatched} have video_id mismatching "
+                f"target '{video_id}'"
+            )
         self.metadata_dir.mkdir(parents=True, exist_ok=True)
         output_path = self.metadata_dir / f"{video_id}.json"
         data = [chunk.model_dump(mode="json") for chunk in chunks]

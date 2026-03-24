@@ -1,103 +1,158 @@
-"""Tests for IndexBuilder (IDX-01, IDX-04 integration)."""
-import pytest
-from unittest.mock import MagicMock, patch
+"""Tests for IndexBuilder orchestrator and helper functions."""
 
-from videosearch.index_builder import IndexBuilder, compute_volume_level, build_combined_text
+import pytest
+
 from videosearch.models import (
-    ChunkMetadata, TranscriptSegment, AudioFeatures, OCRResult,
+    AudioFeatures,
+    ChunkMetadata,
+    OCRResult,
+    TranscriptSegment,
 )
 
 
+def _make_audio(rms_mean: float = 0.1) -> AudioFeatures:
+    return AudioFeatures(
+        rms_mean=rms_mean,
+        rms_max=rms_mean * 2,
+        rms_stddev=0.01,
+        zcr_mean=0.05,
+        zcr_max=0.1,
+        zcr_stddev=0.01,
+        has_raised_voice=False,
+    )
+
+
 def _make_chunk(
-    video_id="v1", chunk_index=0,
-    transcript_text=None, ocr_text=None,
-    rms_mean=0.05, has_raised_voice=False,
-):
+    video_id: str = "v1",
+    chunk_index: int = 0,
+    transcript_texts: list[str] | None = None,
+    ocr_texts: list[str] | None = None,
+    rms_mean: float = 0.1,
+    has_audio: bool = True,
+) -> ChunkMetadata:
     transcript = None
-    if transcript_text:
-        transcript = [TranscriptSegment(
-            text=transcript_text, start=0.0, end=10.0,
-            avg_logprob=-0.3,
-            words=[{"word": w, "start": 0.0, "end": 1.0, "probability": 0.9}
-                   for w in transcript_text.split()],
-        )]
+    if transcript_texts is not None:
+        transcript = [
+            TranscriptSegment(
+                text=t, start=0.0, end=1.0, avg_logprob=-0.3, words=[]
+            )
+            for t in transcript_texts
+        ]
     ocr_results = None
-    if ocr_text:
-        ocr_results = [OCRResult(
-            text=ocr_text, confidence=0.95,
-            first_seen=0.0, last_seen=5.0,
-            bbox=[[0, 0], [100, 0], [100, 30], [0, 30]],
-        )]
-    audio = AudioFeatures(
-        rms_mean=rms_mean, rms_max=rms_mean * 2, rms_stddev=rms_mean * 0.3,
-        zcr_mean=0.05, zcr_max=0.1, zcr_stddev=0.02,
-        has_raised_voice=has_raised_voice,
-    )
+    if ocr_texts is not None:
+        ocr_results = [
+            OCRResult(
+                text=t,
+                confidence=0.95,
+                first_seen=0.0,
+                last_seen=1.0,
+                bbox=[[0, 0], [1, 0], [1, 1], [0, 1]],
+            )
+            for t in ocr_texts
+        ]
+    audio = _make_audio(rms_mean) if has_audio else None
     return ChunkMetadata(
-        video_id=video_id, chunk_index=chunk_index,
-        start_time=0.0, end_time=30.0, duration=30.0,
-        scene_type="detected", transcript=transcript,
-        audio_features=audio, ocr_results=ocr_results,
+        video_id=video_id,
+        chunk_index=chunk_index,
+        start_time=0.0,
+        end_time=30.0,
+        duration=30.0,
+        scene_type="detected",
+        transcript=transcript,
+        audio_features=audio,
+        ocr_results=ocr_results,
     )
 
 
-def test_combined_text_format():
-    chunk = _make_chunk(transcript_text="hello world", ocr_text="STOP SIGN")
-    text = build_combined_text(chunk)
-    assert text == "Transcript: hello world\nOCR: STOP SIGN"
+# --- build_combined_text tests ---
+
+class TestBuildCombinedText:
+    def test_combined_text_format(self):
+        """Chunk with both transcript and OCR returns labeled format."""
+        from videosearch.index_builder import build_combined_text
+
+        chunk = _make_chunk(transcript_texts=["hello", "world"], ocr_texts=["STOP SIGN"])
+        result = build_combined_text(chunk)
+        assert result == "Transcript: hello world\nOCR: STOP SIGN"
+
+    def test_combined_text_transcript_only(self):
+        """Chunk with only transcript returns transcript section."""
+        from videosearch.index_builder import build_combined_text
+
+        chunk = _make_chunk(transcript_texts=["hello", "world"])
+        result = build_combined_text(chunk)
+        assert result == "Transcript: hello world"
+
+    def test_combined_text_ocr_only(self):
+        """Chunk with only OCR returns OCR section."""
+        from videosearch.index_builder import build_combined_text
+
+        chunk = _make_chunk(ocr_texts=["STOP"])
+        result = build_combined_text(chunk)
+        assert result == "OCR: STOP"
+
+    def test_combined_text_empty(self):
+        """Chunk with neither transcript nor OCR returns empty string."""
+        from videosearch.index_builder import build_combined_text
+
+        chunk = _make_chunk()
+        result = build_combined_text(chunk)
+        assert result == ""
 
 
-def test_combined_text_transcript_only():
-    chunk = _make_chunk(transcript_text="hello world", ocr_text=None)
-    text = build_combined_text(chunk)
-    assert text == "Transcript: hello world"
+# --- skip empty chunks test ---
+
+class TestSkipEmptyChunks:
+    def test_skip_empty_chunks(self):
+        """Chunks with no transcript AND no OCR are excluded from embeddable set."""
+        from videosearch.index_builder import build_combined_text
+
+        chunks = [
+            _make_chunk(chunk_index=0, transcript_texts=["hello"]),
+            _make_chunk(chunk_index=1),  # empty — no transcript, no OCR
+            _make_chunk(chunk_index=2, ocr_texts=["EXIT"]),
+        ]
+        embeddable = [c for c in chunks if build_combined_text(c)]
+        assert len(embeddable) == 2
+        assert embeddable[0].chunk_index == 0
+        assert embeddable[1].chunk_index == 2
 
 
-def test_combined_text_ocr_only():
-    chunk = _make_chunk(transcript_text=None, ocr_text="STOP")
-    text = build_combined_text(chunk)
-    assert text == "OCR: STOP"
+# --- compute_volume_level tests ---
+
+class TestComputeVolumeLevel:
+    def test_volume_level_bins(self):
+        """Volume level is quiet/normal/loud based on RMS distribution."""
+        from videosearch.index_builder import compute_volume_level
+
+        # Create a distribution with tight clustering around 0.1 so outliers
+        # are clearly beyond 2 stddevs. 100 chunks at 0.1 gives mean~0.1,
+        # stddev~0.0 so 0.01 is clearly quiet and 0.5 is clearly loud.
+        chunks = [
+            _make_chunk(chunk_index=i, rms_mean=0.1) for i in range(100)
+        ]
+        quiet_chunk = _make_chunk(chunk_index=100, rms_mean=0.01)
+        loud_chunk = _make_chunk(chunk_index=101, rms_mean=0.5)
+        all_chunks = chunks + [quiet_chunk, loud_chunk]
+
+        assert compute_volume_level(quiet_chunk, all_chunks) == "quiet"
+        assert compute_volume_level(loud_chunk, all_chunks) == "loud"
+        assert compute_volume_level(chunks[0], all_chunks) == "normal"
 
 
-def test_combined_text_empty():
-    chunk = _make_chunk(transcript_text=None, ocr_text=None)
-    text = build_combined_text(chunk)
-    assert text == ""
+# --- boolean flag tests ---
 
+class TestBooleanFlags:
+    def test_has_speech_flag(self):
+        """Chunk with transcript has truthy transcript field."""
+        chunk_with = _make_chunk(transcript_texts=["hello"])
+        chunk_without = _make_chunk()
+        assert bool(chunk_with.transcript)
+        assert not chunk_without.transcript
 
-def test_skip_empty_chunks():
-    """Chunks with no transcript AND no OCR should not be embedded (D-03)."""
-    chunks = [
-        _make_chunk(chunk_index=0, transcript_text="hello"),
-        _make_chunk(chunk_index=1),  # empty — no transcript, no OCR
-        _make_chunk(chunk_index=2, ocr_text="STOP"),
-    ]
-    embeddable = [c for c in chunks if build_combined_text(c)]
-    assert len(embeddable) == 2
-
-
-def test_volume_level_bins():
-    """Volume levels should be quiet/normal/loud based on per-video RMS distribution (D-05)."""
-    # Create chunks with varying RMS — middle is normal, extreme high is loud, extreme low is quiet
-    chunks = [
-        _make_chunk(chunk_index=i, rms_mean=rms)
-        for i, rms in enumerate([0.01, 0.05, 0.05, 0.05, 0.05, 0.5])
-    ]
-    levels = [compute_volume_level(c, chunks) for c in chunks]
-    assert "quiet" in levels  # 0.01 is far below mean
-    assert "loud" in levels   # 0.5 is far above mean
-    assert "normal" in levels
-
-
-def test_has_speech_flag():
-    chunk_with = _make_chunk(transcript_text="hello")
-    chunk_without = _make_chunk(transcript_text=None)
-    assert bool(chunk_with.transcript) is True
-    assert chunk_without.transcript is None
-
-
-def test_has_ocr_flag():
-    chunk_with = _make_chunk(ocr_text="STOP")
-    chunk_without = _make_chunk(ocr_text=None)
-    assert bool(chunk_with.ocr_results) is True
-    assert chunk_without.ocr_results is None
+    def test_has_ocr_flag(self):
+        """Chunk with OCR results has truthy ocr_results field."""
+        chunk_with = _make_chunk(ocr_texts=["STOP"])
+        chunk_without = _make_chunk()
+        assert bool(chunk_with.ocr_results)
+        assert not chunk_without.ocr_results
