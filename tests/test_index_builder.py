@@ -125,13 +125,14 @@ class TestComputeVolumeLevel:
         """Volume level is quiet/normal/loud based on RMS distribution."""
         from videosearch.index_builder import compute_volume_level
 
-        # Create a distribution where mean=0.1, stddev is small
-        # so 0.01 is quiet (below mean-2*stddev) and 0.5 is loud (above mean+2*stddev)
+        # Create a distribution with tight clustering around 0.1 so outliers
+        # are clearly beyond 2 stddevs. 100 chunks at 0.1 gives mean~0.1,
+        # stddev~0.0 so 0.01 is clearly quiet and 0.5 is clearly loud.
         chunks = [
-            _make_chunk(chunk_index=i, rms_mean=0.1) for i in range(10)
+            _make_chunk(chunk_index=i, rms_mean=0.1) for i in range(100)
         ]
-        quiet_chunk = _make_chunk(chunk_index=10, rms_mean=0.01)
-        loud_chunk = _make_chunk(chunk_index=11, rms_mean=0.5)
+        quiet_chunk = _make_chunk(chunk_index=100, rms_mean=0.01)
+        loud_chunk = _make_chunk(chunk_index=101, rms_mean=0.5)
         all_chunks = chunks + [quiet_chunk, loud_chunk]
 
         assert compute_volume_level(quiet_chunk, all_chunks) == "quiet"
