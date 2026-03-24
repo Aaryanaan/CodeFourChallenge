@@ -7,6 +7,9 @@ dependencies = [
     "pydantic>=2.12",
     "pydantic-settings>=2.13",
     "scenedetect[opencv]>=0.6.7",
+    "google-genai>=1.68",
+    "lancedb>=0.30.1",
+    "rank-bm25>=0.2.2",
 ]
 
 [project.optional-dependencies]
