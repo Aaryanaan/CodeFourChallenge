@@ -40,7 +40,9 @@ class Settings(BaseSettings):
     # Model identifiers (per D-11, ARC-03)
     captioner_model: str = "google/gemini-2.5-flash"
     reranker_model: str = "anthropic/claude-sonnet-4"
-    embedder_model: str = "text-embedding-004"
+    embedder_model: str = "gemini-embedding-001"
+    embedding_dimensions: int = 768
+    embedding_batch_size: int = 50
 
     # Extraction settings
     whisper_model: str = "large-v3"  # faster-whisper model size
