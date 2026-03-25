@@ -71,6 +71,7 @@ class ChunkMetadata(BaseModel):
     transcript: Optional[list[TranscriptSegment]] = None
     audio_features: Optional[AudioFeatures] = None
     ocr_results: Optional[list[OCRResult]] = None
+    visual_caption: Optional[str] = None
 
 
 class SearchResult(BaseModel):

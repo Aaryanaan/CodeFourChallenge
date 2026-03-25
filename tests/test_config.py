@@ -120,3 +120,11 @@ def test_settings_ocr_frame_interval_default():
     """Settings has ocr_frame_interval field defaulting to 2.0."""
     settings = Settings(_env_file=None)
     assert settings.ocr_frame_interval == 2.0
+
+
+def test_caption_settings_defaults():
+    """Settings has caption cost ceiling, cache dir, and cost per chunk defaults."""
+    settings = Settings(google_api_key="test", _env_file=None)
+    assert settings.caption_cost_ceiling == 5.0
+    assert str(settings.caption_cache_dir) == "data/cache/captions"
+    assert settings.caption_cost_per_chunk == 0.003

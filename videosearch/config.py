@@ -55,3 +55,8 @@ class Settings(BaseSettings):
     retrieval_vector_weight: float = 1.0
     retrieval_bm25_weight: float = 1.0
     retrieval_filter_weight: float = 0.5
+
+    # Captioning (Phase 5)
+    caption_cost_ceiling: float = 5.0
+    caption_cache_dir: Path = Path("data/cache/captions")
+    caption_cost_per_chunk: float = 0.003

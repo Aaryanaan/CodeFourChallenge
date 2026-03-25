@@ -215,3 +215,28 @@ def test_chunk_metadata_backward_compat_none_fields():
     restored = ChunkMetadata.model_validate_json(json_str)
     assert restored == chunk
     assert restored.transcript is None
+
+
+def test_visual_caption_field():
+    """ChunkMetadata has optional visual_caption field with round-trip support."""
+    chunk = ChunkMetadata(
+        video_id="v",
+        chunk_index=0,
+        start_time=0.0,
+        end_time=30.0,
+        duration=30.0,
+        scene_type="detected",
+    )
+    assert chunk.visual_caption is None
+    chunk2 = ChunkMetadata(
+        video_id="v",
+        chunk_index=0,
+        start_time=0.0,
+        end_time=30.0,
+        duration=30.0,
+        scene_type="detected",
+        visual_caption="Clothing: navy uniform",
+    )
+    assert chunk2.visual_caption == "Clothing: navy uniform"
+    roundtrip = ChunkMetadata.model_validate(chunk2.model_dump(mode="json"))
+    assert roundtrip.visual_caption == "Clothing: navy uniform"
