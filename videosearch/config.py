@@ -60,3 +60,8 @@ class Settings(BaseSettings):
     caption_cost_ceiling: float = 5.0
     caption_cache_dir: Path = Path("data/cache/captions")
     caption_cost_per_chunk: float = 0.003
+
+    # Query Intelligence (Phase 6)
+    classifier_model: str = "gemini-2.0-flash"  # Google AI SDK model ID (no google/ prefix)
+    classifier_cache_dir: Path = Path("data/cache/classifier")
+    reranker_cache_dir: Path = Path("data/cache/reranker")

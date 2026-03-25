@@ -58,3 +58,8 @@ class Retriever(Protocol):
 @runtime_checkable
 class Reranker(Protocol):
     def rerank(self, query: str, candidates: list[dict], top_k: int) -> list[dict]: ...
+
+
+@runtime_checkable
+class Classifier(Protocol):
+    def classify(self, query: str) -> dict: ...
