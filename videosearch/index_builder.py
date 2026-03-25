@@ -18,11 +18,12 @@ logger = logging.getLogger(__name__)
 
 
 def build_combined_text(chunk: ChunkMetadata) -> str:
-    """Build labeled combined text from transcript + OCR (D-01).
+    """Build labeled combined text from transcript + OCR + caption (D-01, D-23).
 
-    Format: 'Transcript: {text}\\nOCR: {text}'
-    Returns empty string if both are missing (D-03 -- skip for embedding).
+    Format: 'Transcript: {text}\\nOCR: {text}\\nCaption: {text}'
+    Returns empty string if all are missing (D-03 -- skip for embedding).
     Does NOT include audio feature descriptors (D-02).
+    Caption goes last (per D-23 -- most token-dense, won't crowd out exact matches).
     """
     parts = []
     if chunk.transcript:
@@ -33,6 +34,8 @@ def build_combined_text(chunk: ChunkMetadata) -> str:
         ocr_text = " ".join(r.text for r in chunk.ocr_results)
         if ocr_text.strip():
             parts.append(f"OCR: {ocr_text}")
+    if chunk.visual_caption:
+        parts.append(f"Caption: {chunk.visual_caption}")
     return "\n".join(parts)
 
 

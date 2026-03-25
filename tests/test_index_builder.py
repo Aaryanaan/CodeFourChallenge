@@ -156,3 +156,33 @@ class TestBooleanFlags:
         chunk_without = _make_chunk()
         assert bool(chunk_with.ocr_results)
         assert not chunk_without.ocr_results
+
+
+# --- build_combined_text caption tests (D-23) ---
+
+class TestBuildCombinedTextWithCaption:
+    def test_combined_text_with_caption(self):
+        """Chunk with transcript + OCR + caption includes all three sections."""
+        from videosearch.index_builder import build_combined_text
+
+        chunk = _make_chunk(transcript_texts=["hello"], ocr_texts=["STOP"])
+        chunk.visual_caption = "Clothing: navy uniform\nActions: walking"
+        result = build_combined_text(chunk)
+        assert result == "Transcript: hello\nOCR: STOP\nCaption: Clothing: navy uniform\nActions: walking"
+
+    def test_combined_text_caption_only(self):
+        """Chunk with only visual_caption returns Caption section."""
+        from videosearch.index_builder import build_combined_text
+
+        chunk = _make_chunk()
+        chunk.visual_caption = "Clothing: navy uniform"
+        result = build_combined_text(chunk)
+        assert result == "Caption: Clothing: navy uniform"
+
+    def test_combined_text_no_caption(self):
+        """Chunk without visual_caption produces no Caption section (backward compat)."""
+        from videosearch.index_builder import build_combined_text
+
+        chunk = _make_chunk(transcript_texts=["hello"])
+        result = build_combined_text(chunk)
+        assert "Caption:" not in result
