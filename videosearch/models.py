@@ -71,3 +71,15 @@ class ChunkMetadata(BaseModel):
     transcript: Optional[list[TranscriptSegment]] = None
     audio_features: Optional[AudioFeatures] = None
     ocr_results: Optional[list[OCRResult]] = None
+
+
+class SearchResult(BaseModel):
+    """A single search result with provenance."""
+
+    video_id: str
+    chunk_index: int
+    start_time: float
+    end_time: float
+    score: float
+    transcript_snippet: str = ""
+    reasoning: str = ""  # Phase 6 fills via LLM reranker

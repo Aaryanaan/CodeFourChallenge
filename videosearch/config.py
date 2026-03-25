@@ -50,3 +50,8 @@ class Settings(BaseSettings):
     ocr_confidence_threshold: float = 0.7  # minimum PaddleOCR confidence
     raised_voice_stddev_threshold: float = 2.0  # RMS std devs above mean
     ocr_frame_interval: float = 2.0  # seconds between OCR frame samples
+
+    # Retrieval weights (Phase 4 defaults, Phase 6 overrides per-query)
+    retrieval_vector_weight: float = 1.0
+    retrieval_bm25_weight: float = 1.0
+    retrieval_filter_weight: float = 0.5
