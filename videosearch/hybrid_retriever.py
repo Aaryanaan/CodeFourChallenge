@@ -4,11 +4,14 @@ Implements Retriever protocol. Fuses results via Reciprocal Rank Fusion (RRF)
 with configurable per-source weights.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 from videosearch.bm25_store import BM25Store
 from videosearch.config import Settings
 from videosearch.embedder import GeminiEmbedder
+from videosearch.protocols import Classifier, Reranker
 from videosearch.vector_store import LanceVectorStore
 
 
@@ -75,7 +78,12 @@ class HybridRetriever:
                (only activated when query contains modality-specific terms)
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        classifier: Classifier | None = None,
+        reranker: Reranker | None = None,
+    ) -> None:
         self._embedder = GeminiEmbedder(settings)
         self._vector_store = LanceVectorStore(index_dir=settings.index_dir)
         self._bm25_store = BM25Store()
@@ -86,7 +94,9 @@ class HybridRetriever:
             self._bm25_store.load(bm25_path)
             self._bm25_loaded = True
 
-        self._weights = [
+        self._classifier = classifier
+        self._reranker = reranker
+        self._default_weights = [
             settings.retrieval_vector_weight,
             settings.retrieval_bm25_weight,
             settings.retrieval_filter_weight,
@@ -95,8 +105,9 @@ class HybridRetriever:
     def retrieve(self, query: str, top_k: int = 10) -> list[dict]:
         """Retrieve top-k results via hybrid RRF fusion.
 
-        Always runs vector and BM25 paths. Conditionally adds a metadata
-        filter path when _detect_filters returns a non-None expression.
+        When a classifier is present, uses its weights and query_type for
+        filter mapping. When a reranker is present, widens the candidate pool
+        to RERANK_POOL and reranks before returning top_k.
 
         Args:
             query:  Natural language query string.
@@ -104,9 +115,10 @@ class HybridRetriever:
 
         Returns:
             List of result dicts with original schema columns plus
-            "rrf_score", sorted by rrf_score descending.
+            "rrf_score", sorted by rrf_score descending. When reranker is
+            active, each dict also contains a "reasoning" key.
         """
-        fetch_k = top_k * 2
+        RERANK_POOL = 20  # wider pool for reranker input; output capped at top_k
 
         # Preflight: catch empty/missing index before spending an API call on embedding
         if self._vector_store.count() == 0:
@@ -114,7 +126,21 @@ class HybridRetriever:
                 "Vector index is empty — run `videosearch index` first."
             )
 
-        # Vector path
+        # Step 1: Classify query (or fall back to heuristic)
+        query_type = "mixed"
+        if self._classifier:
+            classification = self._classifier.classify(query)
+            query_type = classification["query_type"]
+            w = classification["weights"]
+            weights = [w["vector"], w["bm25"], w["filter"]]
+            filter_expr = self._map_filter(query, query_type)
+        else:
+            weights = list(self._default_weights)
+            filter_expr = self._detect_filters(query)
+
+        # Step 2: Retrieve from all paths (wider fetch when reranker present)
+        fetch_k = max(top_k * 3, RERANK_POOL) if self._reranker else top_k * 2
+
         query_vector = self._embedder.embed_query(query)
         vector_results = self._vector_store.search(query_vector, top_k=fetch_k)
 
@@ -124,25 +150,48 @@ class HybridRetriever:
             bm25_results = self._bm25_store.search(query, top_k=fetch_k)
 
         # Filter path (conditional)
-        filter_expr = self._detect_filters(query)
         filter_results: list[dict] = []
         if filter_expr is not None:
             filter_results = self._vector_store.search(
                 query_vector, top_k=fetch_k, filter_expr=filter_expr
             )
 
-        # Build ranked lists and weights for RRF
+        # Step 3: Build ranked lists and active weights for RRF
         lists: list[list[dict]] = [vector_results]
-        active_weights: list[float] = [self._weights[0]]
+        active_weights: list[float] = [weights[0]]
         if bm25_results:
             lists.append(bm25_results)
-            active_weights.append(self._weights[1])
-
+            active_weights.append(weights[1])
         if filter_results:
             lists.append(filter_results)
-            active_weights.append(self._weights[2])
+            active_weights.append(weights[2])
 
-        return reciprocal_rank_fusion(lists, active_weights)[:top_k]
+        fused = reciprocal_rank_fusion(lists, active_weights)
+
+        # Step 4: Rerank if available (input=top-20, output=top_k)
+        if self._reranker:
+            pool = fused[:RERANK_POOL]
+            return self._reranker.rerank(query, pool, top_k, query_type=query_type)
+        return fused[:top_k]
+
+    def _map_filter(self, query: str, query_type: str) -> str | None:
+        """Map classifier query_type + query keywords to a LanceDB filter expression.
+
+        The classifier determines the TYPE; this method determines the specific
+        FILTER expression based on type + query keywords.
+        """
+        q = query.lower()
+        if query_type == "audio":
+            if any(word in q for word in ["raise", "voice", "loud", "yell", "shout", "scream"]):
+                return "has_raised_voice = true"
+            if "quiet" in q or "silent" in q:
+                return "volume_level = 'quiet'"
+            # Default audio filter: raised voice (most common audio query)
+            return "has_raised_voice = true"
+        if query_type == "visual":
+            if any(word in q for word in ["text", "sign", "license", "plate", "written"]):
+                return "has_ocr = true"
+        return None
 
     def _detect_filters(self, query: str) -> str | None:
         """Detect modality-specific filter expressions from query text.
