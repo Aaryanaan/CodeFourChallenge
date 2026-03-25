@@ -68,7 +68,11 @@ def search(
     """Search ingested video footage with a natural language query."""
     settings = Settings()
     retriever = HybridRetriever(settings)
-    results = retriever.retrieve(query, top_k=top_k)
+    try:
+        results = retriever.retrieve(query, top_k=top_k)
+    except RuntimeError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1)
 
     if not results:
         console.print("[yellow]No results found.[/yellow]")

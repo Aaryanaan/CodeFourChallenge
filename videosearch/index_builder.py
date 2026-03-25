@@ -156,11 +156,24 @@ class IndexBuilder:
             self._vector_store.upsert(vector_rows)
             logger.info("Upserted %d rows to vector store", len(vector_rows))
 
-        # Step 5: Build BM25 index
-        self._bm25_store.build(all_chunks)
+        # Step 5: Build BM25 index — always over the FULL corpus.
+        # BM25 is rebuilt from scratch each time, so it must include every
+        # ingested video, not just the ones requested in this call. Otherwise
+        # `index video_b` would silently drop video_a from keyword search while
+        # its vectors remain in LanceDB, breaking hybrid search consistency.
+        all_metadata_ids = [
+            p.stem for p in self._settings.metadata_dir.glob("*.json")
+        ]
+        bm25_chunks: list[ChunkMetadata] = []
+        for vid in all_metadata_ids:
+            bm25_chunks.extend(self._metadata_writer.load(vid))
+        self._bm25_store.build(bm25_chunks)
         bm25_path = self._settings.index_dir / "bm25.pkl"
         self._bm25_store.save(str(bm25_path))
-        logger.info("Built and saved BM25 index at %s", bm25_path)
+        logger.info(
+            "Built and saved BM25 index over %d videos at %s",
+            len(all_metadata_ids), bm25_path,
+        )
 
         return {
             "total_chunks": len(all_chunks),

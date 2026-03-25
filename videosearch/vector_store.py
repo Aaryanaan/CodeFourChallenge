@@ -55,6 +55,10 @@ class LanceVectorStore:
             .execute(rows)
         )
 
+    def count(self) -> int:
+        """Return the number of rows in the vector store."""
+        return self._get_table().count_rows()
+
     def search(
         self,
         vector: list[float],

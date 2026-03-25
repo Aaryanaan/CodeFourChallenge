@@ -79,10 +79,12 @@ class HybridRetriever:
         self._embedder = GeminiEmbedder(settings)
         self._vector_store = LanceVectorStore(index_dir=settings.index_dir)
         self._bm25_store = BM25Store()
+        self._bm25_loaded = False
 
         bm25_path = settings.index_dir / "bm25.pkl"
         if bm25_path.exists():
             self._bm25_store.load(bm25_path)
+            self._bm25_loaded = True
 
         self._weights = [
             settings.retrieval_vector_weight,
@@ -106,12 +108,20 @@ class HybridRetriever:
         """
         fetch_k = top_k * 2
 
+        # Preflight: catch empty/missing index before spending an API call on embedding
+        if self._vector_store.count() == 0:
+            raise RuntimeError(
+                "Vector index is empty — run `videosearch index` first."
+            )
+
         # Vector path
         query_vector = self._embedder.embed_query(query)
         vector_results = self._vector_store.search(query_vector, top_k=fetch_k)
 
-        # BM25 path
-        bm25_results = self._bm25_store.search(query, top_k=fetch_k)
+        # BM25 path (skipped gracefully if index was never built)
+        bm25_results: list[dict] = []
+        if self._bm25_loaded:
+            bm25_results = self._bm25_store.search(query, top_k=fetch_k)
 
         # Filter path (conditional)
         filter_expr = self._detect_filters(query)
@@ -122,8 +132,11 @@ class HybridRetriever:
             )
 
         # Build ranked lists and weights for RRF
-        lists: list[list[dict]] = [vector_results, bm25_results]
-        active_weights: list[float] = [self._weights[0], self._weights[1]]
+        lists: list[list[dict]] = [vector_results]
+        active_weights: list[float] = [self._weights[0]]
+        if bm25_results:
+            lists.append(bm25_results)
+            active_weights.append(self._weights[1])
 
         if filter_results:
             lists.append(filter_results)

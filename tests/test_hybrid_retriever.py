@@ -133,6 +133,7 @@ def _build_retriever_with_mocks():
         MockBM25.return_value = mock_bm25_instance
 
         retriever = HybridRetriever(settings)
+        retriever._bm25_loaded = True  # simulate bm25.pkl present and loaded
 
     return retriever, mock_emb_instance, mock_vs_instance, mock_bm25_instance
 

@@ -20,6 +20,7 @@ class BM25Store:
     def __init__(self):
         self._bm25: BM25Okapi | None = None
         self._chunk_ids: list[dict] = []  # [{"video_id": ..., "chunk_index": ...}]
+        self._initialized: bool = False  # True after build() or load() called
 
     @property
     def _corpus_size(self) -> int:
@@ -33,7 +34,11 @@ class BM25Store:
         return " ".join(seg.text for seg in chunk.transcript)
 
     def build(self, chunks: list[ChunkMetadata]) -> None:
-        """Build BM25 index from chunks. Skips chunks with no transcript (D-09)."""
+        """Build BM25 index from chunks. Skips chunks with no transcript (D-09).
+
+        If no chunks have transcripts (all-silent video), the index is left empty
+        and search() will return [] rather than crashing.
+        """
         corpus: list[list[str]] = []
         ids: list[dict] = []
         for chunk in chunks:
@@ -42,6 +47,11 @@ class BM25Store:
                 continue  # D-09: skip silent chunks
             corpus.append(text.lower().split())
             ids.append({"video_id": chunk.video_id, "chunk_index": chunk.chunk_index})
+        self._initialized = True
+        if not corpus:
+            self._bm25 = None
+            self._chunk_ids = []
+            return
         self._bm25 = BM25Okapi(corpus)
         self._chunk_ids = ids
 
@@ -58,14 +68,19 @@ class BM25Store:
             data = pickle.load(f)
         self._bm25 = data["bm25"]
         self._chunk_ids = data["chunk_ids"]
+        self._initialized = True
 
     def search(self, query: str, top_k: int = 10) -> list[dict]:
         """Search for query terms. Returns top-k results with scores > 0.
 
         Returns list of dicts with keys: video_id, chunk_index, score.
+        Returns [] if corpus is empty (all-silent video — not an error).
+        Raises RuntimeError if called before build() or load().
         """
-        if self._bm25 is None:
+        if not self._initialized:
             raise RuntimeError("BM25Store not built or loaded. Call build() or load() first.")
+        if self._bm25 is None:
+            return []  # built/loaded but corpus was empty
         tokens = query.lower().split()
         scores = self._bm25.get_scores(tokens)
         top_indices = scores.argsort()[::-1][:top_k]
