@@ -286,22 +286,94 @@ def test_caption_command_success():
     mock_captioner_instance = MagicMock()
     mock_captioner_instance.caption.return_value = {"caption": "Clothing: uniform", "cached": False}
 
-    with patch("videosearch.cli.MetadataWriter", return_value=mock_writer_instance):
-        with patch("videosearch.cli.GeminiCaptioner", return_value=mock_captioner_instance):
-            with patch("videosearch.cli.Settings") as mock_settings_cls:
-                mock_settings = MagicMock()
-                mock_settings.video_dir = Path("data/videos")
-                mock_settings_cls.return_value = mock_settings
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        compressed_dir = tmp_path / "compressed"
+        compressed_dir.mkdir()
+        compressed_file = compressed_dir / "test_video_720p.mp4"
+        compressed_file.write_bytes(b"")  # exists check only
 
-                result = runner.invoke(app, ["caption", "test_video.mp4"])
+        with patch("videosearch.cli.MetadataWriter", return_value=mock_writer_instance):
+            with patch("videosearch.cli.GeminiCaptioner", return_value=mock_captioner_instance):
+                with patch("videosearch.cli.Settings") as mock_settings_cls:
+                    mock_settings = MagicMock()
+                    mock_settings.video_dir = tmp_path
+                    mock_settings.caption_cache_dir = tmp_path / "captions"
+                    mock_settings.caption_cost_per_chunk = 0.003
+                    mock_settings.caption_cost_ceiling = 5.0
+                    mock_settings_cls.return_value = mock_settings
+
+                    result = runner.invoke(app, ["caption", "test_video.mp4"])
 
     assert result.exit_code == 0, f"Expected exit 0, got {result.exit_code}: {result.output}"
     assert "Captioned" in result.output
     assert "3 new" in result.output
     mock_writer_instance.write.assert_called_once()
-    # Verify each chunk got visual_caption set
     for chunk in chunks:
         assert chunk.visual_caption == "Clothing: uniform"
+
+
+def test_caption_command_compressed_missing():
+    """caption exits 1 with clear error when compressed file does not exist."""
+    from videosearch.models import ChunkMetadata
+
+    chunks = [MagicMock(spec=ChunkMetadata, chunk_index=0, visual_caption=None,
+                        start_time=0.0, end_time=30.0)]
+    mock_writer_instance = MagicMock()
+    mock_writer_instance.load.return_value = chunks
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        # compressed/ dir exists but the file does NOT
+        (tmp_path / "compressed").mkdir()
+
+        with patch("videosearch.cli.MetadataWriter", return_value=mock_writer_instance):
+            with patch("videosearch.cli.GeminiCaptioner"):
+                with patch("videosearch.cli.Settings") as mock_settings_cls:
+                    mock_settings = MagicMock()
+                    mock_settings.video_dir = tmp_path
+                    mock_settings.caption_cache_dir = tmp_path / "captions"
+                    mock_settings.caption_cost_per_chunk = 0.003
+                    mock_settings.caption_cost_ceiling = 5.0
+                    mock_settings_cls.return_value = mock_settings
+
+                    result = runner.invoke(app, ["caption", "test_video.mp4"])
+
+    assert result.exit_code == 1
+    assert "Compressed video not found" in result.output
+
+
+def test_caption_command_exceeds_ceiling():
+    """caption exits 1 when estimated cost exceeds ceiling."""
+    from videosearch.models import ChunkMetadata
+
+    # 2000 uncached chunks * $0.003 = $6.00 > $5.00 ceiling
+    chunks = [MagicMock(spec=ChunkMetadata, chunk_index=i, visual_caption=None,
+                        start_time=float(i * 30), end_time=float((i + 1) * 30))
+              for i in range(2000)]
+    mock_writer_instance = MagicMock()
+    mock_writer_instance.load.return_value = chunks
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        compressed_dir = tmp_path / "compressed"
+        compressed_dir.mkdir()
+        (compressed_dir / "test_video_720p.mp4").write_bytes(b"")
+
+        with patch("videosearch.cli.MetadataWriter", return_value=mock_writer_instance):
+            with patch("videosearch.cli.GeminiCaptioner"):
+                with patch("videosearch.cli.Settings") as mock_settings_cls:
+                    mock_settings = MagicMock()
+                    mock_settings.video_dir = tmp_path
+                    mock_settings.caption_cache_dir = tmp_path / "captions"
+                    mock_settings.caption_cost_per_chunk = 0.003
+                    mock_settings.caption_cost_ceiling = 5.0
+                    mock_settings_cls.return_value = mock_settings
+
+                    result = runner.invoke(app, ["caption", "test_video.mp4"])
+
+    assert result.exit_code == 1
+    assert "exceeds ceiling" in result.output
 
 
 def test_caption_command_no_metadata():
@@ -338,14 +410,23 @@ def test_caption_command_partial_failure():
         {"caption": "Actions: walking", "cached": False},    # chunk 2: success
     ]
 
-    with patch("videosearch.cli.MetadataWriter", return_value=mock_writer_instance):
-        with patch("videosearch.cli.GeminiCaptioner", return_value=mock_captioner_instance):
-            with patch("videosearch.cli.Settings") as mock_settings_cls:
-                mock_settings = MagicMock()
-                mock_settings.video_dir = Path("data/videos")
-                mock_settings_cls.return_value = mock_settings
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        compressed_dir = tmp_path / "compressed"
+        compressed_dir.mkdir()
+        (compressed_dir / "test_video_720p.mp4").write_bytes(b"")
 
-                result = runner.invoke(app, ["caption", "test_video.mp4"])
+        with patch("videosearch.cli.MetadataWriter", return_value=mock_writer_instance):
+            with patch("videosearch.cli.GeminiCaptioner", return_value=mock_captioner_instance):
+                with patch("videosearch.cli.Settings") as mock_settings_cls:
+                    mock_settings = MagicMock()
+                    mock_settings.video_dir = tmp_path
+                    mock_settings.caption_cache_dir = tmp_path / "captions"
+                    mock_settings.caption_cost_per_chunk = 0.003
+                    mock_settings.caption_cost_ceiling = 5.0
+                    mock_settings_cls.return_value = mock_settings
+
+                    result = runner.invoke(app, ["caption", "test_video.mp4"])
 
     # No pipeline abort -- exit 0
     assert result.exit_code == 0, f"Expected exit 0, got {result.exit_code}: {result.output}"

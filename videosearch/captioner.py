@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -54,19 +55,30 @@ class GeminiCaptioner:
         self._cache_dir = settings.caption_cache_dir
         self._ffmpeg_path = settings.ffmpeg_path
 
-    def caption(self, video_path: str, start: float, end: float) -> dict:
+    def caption(
+        self,
+        video_path: str,
+        start: float,
+        end: float,
+        chunk_index: int | None = None,
+    ) -> dict:
         """Extract a visual caption for a video chunk.
 
         Args:
             video_path: Path to the source video file.
             start: Start time in seconds.
             end: End time in seconds.
+            chunk_index: Explicit chunk index for the cache key. When omitted,
+                falls back to int(start) for protocol-only callers. Callers with
+                access to the real chunk_index (e.g. CLI) should always pass it
+                so cache keys stay stable if chunk timing changes.
 
         Returns:
             Dict with keys: "caption" (str), "cached" (bool).
         """
         video_id = Path(video_path).stem.replace("_720p", "")
-        chunk_index = int(start)
+        if chunk_index is None:
+            chunk_index = int(start)
 
         # Cache-first: return cached value without any API call
         cached_text = self._load_cache(video_id, chunk_index)
@@ -76,8 +88,13 @@ class GeminiCaptioner:
         # Extract clip to temp file
         clip_path = self._extract_clip(video_path, start, end)
         try:
-            # Upload and caption
+            # Upload and wait for Files API to finish processing
             uploaded = self._client.files.upload(file=clip_path)
+            while uploaded.state.name == "PROCESSING":
+                time.sleep(1)
+                uploaded = self._client.files.get(name=uploaded.name)
+            if uploaded.state.name == "FAILED":
+                raise RuntimeError(f"Files API upload failed for clip: {clip_path}")
             try:
                 response = self._client.models.generate_content(
                     model=self._model,

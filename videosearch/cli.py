@@ -157,15 +157,35 @@ def caption(
         console.print(f"[red]Error:[/red] No metadata for {video_id}. Run `ingest` first.")
         raise typer.Exit(code=1)
 
-    captioner = GeminiCaptioner(settings)
     compressed_path = str(settings.video_dir / "compressed" / f"{video_id}_720p.mp4")
+    if not Path(compressed_path).exists():
+        console.print(
+            f"[red]Error:[/red] Compressed video not found: {compressed_path}\n"
+            f"Run `ingest {video}` to generate it."
+        )
+        raise typer.Exit(code=1)
+
+    # Cost preflight: enforce ceiling before any API spend
+    _new_count = sum(
+        1 for c in chunks
+        if not (settings.caption_cache_dir / video_id / f"{c.chunk_index}.json").exists()
+    )
+    _cost = _new_count * settings.caption_cost_per_chunk
+    if _cost > settings.caption_cost_ceiling:
+        console.print(
+            f"[red]Error:[/red] Estimated cost ${_cost:.4f} exceeds ceiling "
+            f"${settings.caption_cost_ceiling:.2f}. Run `estimate {video}` for details."
+        )
+        raise typer.Exit(code=1)
+
+    captioner = GeminiCaptioner(settings)
     cached_count = 0
     fresh_count = 0
     failed_count = 0
 
     for chunk in chunks:
         try:
-            result = captioner.caption(compressed_path, chunk.start_time, chunk.end_time)
+            result = captioner.caption(compressed_path, chunk.start_time, chunk.end_time, chunk.chunk_index)
             chunk.visual_caption = result["caption"]
             if result.get("cached", False):
                 cached_count += 1
