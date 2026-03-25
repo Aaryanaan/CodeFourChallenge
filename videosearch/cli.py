@@ -17,11 +17,13 @@ from rich.console import Console
 from rich.table import Table
 
 from videosearch.captioner import GeminiCaptioner
+from videosearch.classifier import GeminiQueryClassifier
 from videosearch.config import Settings
 from videosearch.hybrid_retriever import HybridRetriever
 from videosearch.index_builder import IndexBuilder
 from videosearch.ingestion import IngestionPipeline
 from videosearch.metadata_writer import MetadataWriter
+from videosearch.reranker import ClaudeReranker
 
 app = typer.Typer(name="videosearch", help="Search body-worn camera footage")
 console = Console()
@@ -71,7 +73,9 @@ def search(
 ) -> None:
     """Search ingested video footage with a natural language query."""
     settings = Settings()
-    retriever = HybridRetriever(settings)
+    classifier = GeminiQueryClassifier(settings)
+    reranker = ClaudeReranker(settings)
+    retriever = HybridRetriever(settings, classifier=classifier, reranker=reranker)
     try:
         results = retriever.retrieve(query, top_k=top_k)
     except RuntimeError as e:
@@ -215,15 +219,17 @@ def _print_results(results: list[dict], query: str) -> None:
     table.add_column("Video", width=20, no_wrap=True)
     table.add_column("Time", width=15)
     table.add_column("Score", width=8)
-    table.add_column("Snippet", width=60)
+    table.add_column("Snippet", width=50)
+    table.add_column("Reasoning", width=40)
 
     for rank, r in enumerate(results, start=1):
         start = f"{r['start_time']:.1f}s"
         end = f"{r['end_time']:.1f}s"
         time_range = f"{start} – {end}"
-        snippet = r.get("combined_text", "")[:80]
+        snippet = r.get("combined_text", "")[:60]
         score = f"{r.get('rrf_score', 0):.4f}"
-        table.add_row(str(rank), r["video_id"], time_range, score, snippet)
+        reasoning = r.get("reasoning", "")[:50]
+        table.add_row(str(rank), r["video_id"], time_range, score, snippet, reasoning)
 
     console.print(table)
 

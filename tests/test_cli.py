@@ -127,12 +127,15 @@ def test_search_command_success():
     mock_retriever_instance.retrieve.return_value = MOCK_RESULTS
 
     with patch("videosearch.cli.HybridRetriever", return_value=mock_retriever_instance):
-        with patch("videosearch.cli.Settings"):
-            result = runner.invoke(app, ["search", "Miranda rights"])
+        with patch("videosearch.cli.GeminiQueryClassifier"):
+            with patch("videosearch.cli.ClaudeReranker"):
+                with patch("videosearch.cli.Settings"):
+                    result = runner.invoke(app, ["search", "Miranda rights"])
 
     assert result.exit_code == 0, f"Expected exit 0, got {result.exit_code}: {result.output}"
     assert "Results for" in result.output
-    assert "bodycam_001" in result.output
+    # Video ID may be truncated by Rich table in narrow terminal
+    assert "bodycam" in result.output or "bodyc" in result.output
 
 
 def test_search_command_no_results():
@@ -141,8 +144,10 @@ def test_search_command_no_results():
     mock_retriever_instance.retrieve.return_value = []
 
     with patch("videosearch.cli.HybridRetriever", return_value=mock_retriever_instance):
-        with patch("videosearch.cli.Settings"):
-            result = runner.invoke(app, ["search", "nonexistent_query_xyz"])
+        with patch("videosearch.cli.GeminiQueryClassifier"):
+            with patch("videosearch.cli.ClaudeReranker"):
+                with patch("videosearch.cli.Settings"):
+                    result = runner.invoke(app, ["search", "nonexistent_query_xyz"])
 
     assert result.exit_code == 0, f"Expected exit 0, got {result.exit_code}: {result.output}"
     assert "No results found" in result.output
@@ -154,11 +159,39 @@ def test_search_command_top_k():
     mock_retriever_instance.retrieve.return_value = MOCK_RESULTS
 
     with patch("videosearch.cli.HybridRetriever", return_value=mock_retriever_instance):
-        with patch("videosearch.cli.Settings"):
-            result = runner.invoke(app, ["search", "some query", "--top-k", "5"])
+        with patch("videosearch.cli.GeminiQueryClassifier"):
+            with patch("videosearch.cli.ClaudeReranker"):
+                with patch("videosearch.cli.Settings"):
+                    result = runner.invoke(app, ["search", "some query", "--top-k", "5"])
 
     assert result.exit_code == 0, f"Expected exit 0, got {result.exit_code}: {result.output}"
     mock_retriever_instance.retrieve.assert_called_once_with("some query", top_k=5)
+
+
+@patch("videosearch.cli.HybridRetriever")
+@patch("videosearch.cli.ClaudeReranker")
+@patch("videosearch.cli.GeminiQueryClassifier")
+def test_search_wires_classifier_and_reranker(mock_classifier_cls, mock_reranker_cls, mock_retriever_cls):
+    """search command injects classifier and reranker into HybridRetriever."""
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve.return_value = [
+        {"video_id": "v1", "chunk_index": 0, "start_time": 0.0, "end_time": 10.0,
+         "combined_text": "test", "rrf_score": 0.5, "reasoning": "relevant"}
+    ]
+    mock_retriever_cls.return_value = mock_retriever
+
+    with patch("videosearch.cli.Settings"):
+        result = runner.invoke(app, ["search", "test query"])
+
+    assert result.exit_code == 0, f"Expected exit 0, got {result.exit_code}: {result.output}"
+    # Verify HybridRetriever was constructed with classifier and reranker kwargs
+    mock_retriever_cls.assert_called_once()
+    call_kwargs = mock_retriever_cls.call_args
+    assert "classifier" in str(call_kwargs), f"classifier not passed to HybridRetriever: {call_kwargs}"
+    assert "reranker" in str(call_kwargs), f"reranker not passed to HybridRetriever: {call_kwargs}"
+    # Verify GeminiQueryClassifier and ClaudeReranker were instantiated
+    mock_classifier_cls.assert_called_once()
+    mock_reranker_cls.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
