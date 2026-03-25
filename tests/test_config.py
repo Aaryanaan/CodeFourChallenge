@@ -83,3 +83,11 @@ def test_pyscenedetect_config_from_env(monkeypatch):
     assert settings.chunk_max_duration == 90.0
     assert settings.sliding_window_size == 45.0
     assert settings.sliding_window_overlap == 15.0
+
+
+def test_caption_settings_defaults():
+    """Settings has caption cost ceiling, cache dir, and cost per chunk defaults."""
+    settings = Settings(google_api_key="test", _env_file=None)
+    assert settings.caption_cost_ceiling == 5.0
+    assert str(settings.caption_cache_dir) == "data/cache/captions"
+    assert settings.caption_cost_per_chunk == 0.003

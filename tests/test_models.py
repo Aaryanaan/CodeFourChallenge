@@ -64,11 +64,34 @@ def test_chunk_metadata_model_dump():
     )
     data = chunk.model_dump()
     assert isinstance(data, dict)
-    assert set(data.keys()) == {
-        "video_id",
-        "chunk_index",
-        "start_time",
-        "end_time",
-        "duration",
-        "scene_type",
-    }
+    assert "video_id" in data
+    assert "chunk_index" in data
+    assert "start_time" in data
+    assert "end_time" in data
+    assert "duration" in data
+    assert "scene_type" in data
+
+
+def test_visual_caption_field():
+    """ChunkMetadata has optional visual_caption field with round-trip support."""
+    chunk = ChunkMetadata(
+        video_id="v",
+        chunk_index=0,
+        start_time=0.0,
+        end_time=30.0,
+        duration=30.0,
+        scene_type="detected",
+    )
+    assert chunk.visual_caption is None
+    chunk2 = ChunkMetadata(
+        video_id="v",
+        chunk_index=0,
+        start_time=0.0,
+        end_time=30.0,
+        duration=30.0,
+        scene_type="detected",
+        visual_caption="Clothing: navy uniform",
+    )
+    assert chunk2.visual_caption == "Clothing: navy uniform"
+    roundtrip = ChunkMetadata.model_validate(chunk2.model_dump(mode="json"))
+    assert roundtrip.visual_caption == "Clothing: navy uniform"

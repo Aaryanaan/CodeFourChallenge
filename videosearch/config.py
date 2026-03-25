@@ -41,3 +41,8 @@ class Settings(BaseSettings):
     captioner_model: str = "google/gemini-2.5-flash"
     reranker_model: str = "anthropic/claude-sonnet-4"
     embedder_model: str = "text-embedding-004"
+
+    # Captioning (Phase 5)
+    caption_cost_ceiling: float = 5.0
+    caption_cache_dir: Path = Path("data/cache/captions")
+    caption_cost_per_chunk: float = 0.003

@@ -1,5 +1,7 @@
 """Data models for video search pipeline."""
 
+from typing import Optional
+
 from pydantic import BaseModel
 
 
@@ -17,3 +19,4 @@ class ChunkMetadata(BaseModel):
     end_time: float
     duration: float
     scene_type: str  # "detected" or "sliding_window"
+    visual_caption: Optional[str] = None
