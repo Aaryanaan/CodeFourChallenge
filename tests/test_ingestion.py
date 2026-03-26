@@ -17,6 +17,8 @@ from videosearch.models import (
     TranscriptSegment,
 )
 
+_CAPTION_RESULT = {"caption": "test caption", "cached": False}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -119,6 +121,7 @@ def mock_components():
         patch("videosearch.ingestion.LibrosaAudioAnalyzer") as MockAudioAnalyzer,
         patch("videosearch.ingestion.PaddleOCRExtractor") as MockOCR,
         patch("videosearch.ingestion.MetadataWriter") as MockWriter,
+        patch("videosearch.ingestion.GeminiCaptioner", create=True) as MockCaptioner,
     ):
         yield {
             "Compressor": MockCompressor,
@@ -127,10 +130,14 @@ def mock_components():
             "AudioAnalyzer": MockAudioAnalyzer,
             "OCR": MockOCR,
             "Writer": MockWriter,
+            "Captioner": MockCaptioner,
         }
 
 
-def _build_pipeline(tmp_path, mock_components, video_id="bodycam_001", n_chunks=2):
+def _build_pipeline(
+    tmp_path, mock_components, video_id="bodycam_001", n_chunks=2,
+    include_captioner=False,
+):
     """Create an IngestionPipeline with all components mocked and pre-configured."""
     from videosearch.ingestion import IngestionPipeline
 
@@ -155,6 +162,12 @@ def _build_pipeline(tmp_path, mock_components, video_id="bodycam_001", n_chunks=
 
     mock_ocr = mock_components["OCR"].return_value
     mock_ocr.extract.return_value = _OCR_RESULT
+
+    if include_captioner:
+        mock_captioner = mock_components["Captioner"].return_value
+        mock_captioner.caption.return_value = _CAPTION_RESULT
+        settings.caption_cache_dir = tmp_path / "cache" / "captions"
+        settings.caption_cost_per_chunk = 0.003
 
     pipeline = IngestionPipeline(settings)
     return pipeline, settings, chunks, compressed_path
@@ -311,3 +324,88 @@ def test_ingest_populates_chunk_fields(tmp_path, mock_components):
     assert isinstance(chunk.ocr_results, list)
     assert len(chunk.ocr_results) == 1
     assert isinstance(chunk.ocr_results[0], OCRResult)
+
+
+# ---------------------------------------------------------------------------
+# Parallel extraction and --caption tests
+# ---------------------------------------------------------------------------
+
+
+def test_parallel_extraction_runs_all_extractors(tmp_path, mock_components):
+    """With 1 chunk, all 3 extractors are called exactly once and fields populated."""
+    pipeline, settings, chunks, compressed_path = _build_pipeline(
+        tmp_path, mock_components, n_chunks=1
+    )
+
+    pipeline.ingest("/path/to/bodycam_001.mp4")
+
+    chunk = chunks[0]
+    mock_transcriber = mock_components["Transcriber"].return_value
+    mock_audio = mock_components["AudioAnalyzer"].return_value
+    mock_ocr = mock_components["OCR"].return_value
+
+    assert mock_transcriber.transcribe.call_count == 1
+    assert mock_audio.analyze.call_count == 1
+    assert mock_ocr.extract.call_count == 1
+    assert chunk.transcript is not None
+    assert chunk.audio_features is not None
+    assert chunk.ocr_results is not None
+
+
+def test_parallel_extraction_with_caption(tmp_path, mock_components):
+    """When include_caption=True with captioner injected, visual_caption populated."""
+    pipeline, settings, chunks, compressed_path = _build_pipeline(
+        tmp_path, mock_components, n_chunks=1, include_captioner=True
+    )
+
+    pipeline.ingest("/path/to/bodycam_001.mp4", include_caption=True)
+
+    chunk = chunks[0]
+    mock_captioner = mock_components["Captioner"].return_value
+    assert mock_captioner.caption.call_count == 1
+    assert chunk.visual_caption == "test caption"
+
+
+def test_parallel_extraction_single_failure(tmp_path, mock_components):
+    """When transcriber fails, audio and OCR still run and populate chunk fields."""
+    pipeline, settings, chunks, compressed_path = _build_pipeline(
+        tmp_path, mock_components, n_chunks=1
+    )
+    mock_transcriber = mock_components["Transcriber"].return_value
+    mock_transcriber.transcribe.side_effect = RuntimeError("Whisper exploded")
+
+    pipeline.ingest("/path/to/bodycam_001.mp4")
+
+    chunk = chunks[0]
+    assert chunk.transcript is None  # failed
+    assert chunk.audio_features is not None  # still ran
+    assert chunk.ocr_results is not None  # still ran
+
+
+def test_parallel_extraction_all_fail(tmp_path, mock_components):
+    """When all 3 extractors raise, ingest still completes without exception."""
+    pipeline, settings, chunks, compressed_path = _build_pipeline(
+        tmp_path, mock_components, n_chunks=1
+    )
+    mock_components["Transcriber"].return_value.transcribe.side_effect = RuntimeError("fail")
+    mock_components["AudioAnalyzer"].return_value.analyze.side_effect = RuntimeError("fail")
+    mock_components["OCR"].return_value.extract.side_effect = RuntimeError("fail")
+
+    # Should NOT raise
+    pipeline.ingest("/path/to/bodycam_001.mp4")
+
+    # Metadata writer still called
+    mock_writer = mock_components["Writer"].return_value
+    mock_writer.write.assert_called_once()
+
+
+def test_ingest_with_caption_flag(tmp_path, mock_components):
+    """pipeline.ingest(path, include_caption=True) calls captioner for each chunk."""
+    pipeline, settings, chunks, compressed_path = _build_pipeline(
+        tmp_path, mock_components, n_chunks=2, include_captioner=True
+    )
+
+    pipeline.ingest("/path/to/bodycam_001.mp4", include_caption=True)
+
+    mock_captioner = mock_components["Captioner"].return_value
+    assert mock_captioner.caption.call_count == 2
