@@ -117,3 +117,28 @@ def test_search_with_no_filter(store):
 def test_vector_store_satisfies_protocol(store):
     """isinstance(store, VectorStore) is True."""
     assert isinstance(store, VectorStore)
+
+
+# ---------------------------------------------------------------------------
+# count_by_video tests (IDX-05)
+# ---------------------------------------------------------------------------
+
+
+def test_count_by_video_returns_zero_empty(store):
+    """count_by_video returns 0 for nonexistent video on empty table."""
+    assert store.count_by_video("nonexistent") == 0
+
+
+def test_count_by_video_returns_correct_count(store):
+    """count_by_video returns per-video row count after upserting mixed rows."""
+    rows = [
+        _make_row(video_id="video_A", chunk_index=0),
+        _make_row(video_id="video_A", chunk_index=1),
+        _make_row(video_id="video_A", chunk_index=2),
+        _make_row(video_id="video_B", chunk_index=0),
+        _make_row(video_id="video_B", chunk_index=1),
+    ]
+    store.upsert(rows)
+    assert store.count_by_video("video_A") == 3
+    assert store.count_by_video("video_B") == 2
+    assert store.count_by_video("video_C") == 0

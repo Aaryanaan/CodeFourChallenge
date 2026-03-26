@@ -186,3 +186,97 @@ class TestBuildCombinedTextWithCaption:
         chunk = _make_chunk(transcript_texts=["hello"])
         result = build_combined_text(chunk)
         assert "Caption:" not in result
+
+
+# --- Incremental indexing tests (IDX-05, D-05, D-07) ---
+
+class TestIncrementalIndexing:
+    def test_build_index_skips_indexed_video(self):
+        """When count_by_video matches chunk count, embedder.embed_batch is NOT called."""
+        from unittest.mock import MagicMock, patch
+
+        chunks_v1 = [_make_chunk(video_id="v1", chunk_index=i, transcript_texts=["hello"]) for i in range(3)]
+
+        mock_settings = MagicMock()
+        mock_settings.index_dir = "/tmp/test_idx"
+        mock_settings.metadata_dir = "/tmp/test_meta"
+        mock_settings.embedding_batch_size = 50
+        mock_settings.raised_voice_stddev_threshold = 2.0
+
+        with patch("videosearch.index_builder.MetadataWriter") as MockWriter, \
+             patch("videosearch.index_builder.GeminiEmbedder") as MockEmbedder, \
+             patch("videosearch.index_builder.LanceVectorStore") as MockVStore, \
+             patch("videosearch.index_builder.BM25Store") as MockBM25:
+
+            mock_writer = MockWriter.return_value
+            mock_writer.load.return_value = chunks_v1
+
+            mock_vstore = MockVStore.return_value
+            # count_by_video returns 3 = matches len(chunks_v1) => should skip
+            mock_vstore.count_by_video.return_value = 3
+
+            mock_embedder = MockEmbedder.return_value
+            mock_bm25 = MockBM25.return_value
+            mock_bm25._corpus_size = 0
+
+            # Mock metadata_dir.glob for BM25 rebuild
+            mock_settings.metadata_dir.glob.return_value = []
+
+            from videosearch.index_builder import IndexBuilder
+            builder = IndexBuilder.__new__(IndexBuilder)
+            builder._settings = mock_settings
+            builder._embedder = mock_embedder
+            builder._vector_store = mock_vstore
+            builder._bm25_store = mock_bm25
+            builder._metadata_writer = mock_writer
+
+            stats = builder.build_index(["v1"])
+
+            # Embedder should NOT have been called since video was skipped
+            mock_embedder.embed_batch.assert_not_called()
+            assert stats["skipped_videos"] == 1
+
+    def test_build_index_force_reembeds(self):
+        """When force=True, embedder.embed_batch IS called even for already-indexed video."""
+        from unittest.mock import MagicMock, patch
+
+        chunks_v1 = [_make_chunk(video_id="v1", chunk_index=i, transcript_texts=["hello"]) for i in range(3)]
+
+        mock_settings = MagicMock()
+        mock_settings.index_dir = "/tmp/test_idx"
+        mock_settings.metadata_dir = "/tmp/test_meta"
+        mock_settings.embedding_batch_size = 50
+        mock_settings.raised_voice_stddev_threshold = 2.0
+
+        with patch("videosearch.index_builder.MetadataWriter") as MockWriter, \
+             patch("videosearch.index_builder.GeminiEmbedder") as MockEmbedder, \
+             patch("videosearch.index_builder.LanceVectorStore") as MockVStore, \
+             patch("videosearch.index_builder.BM25Store") as MockBM25:
+
+            mock_writer = MockWriter.return_value
+            mock_writer.load.return_value = chunks_v1
+
+            mock_vstore = MockVStore.return_value
+            # count_by_video returns 3 = matches, but force=True should override
+            mock_vstore.count_by_video.return_value = 3
+
+            mock_embedder = MockEmbedder.return_value
+            mock_embedder.embed_batch.return_value = [[0.1] * 768 for _ in range(3)]
+            mock_bm25 = MockBM25.return_value
+            mock_bm25._corpus_size = 3
+
+            mock_settings.metadata_dir.glob.return_value = []
+
+            from videosearch.index_builder import IndexBuilder
+            builder = IndexBuilder.__new__(IndexBuilder)
+            builder._settings = mock_settings
+            builder._embedder = mock_embedder
+            builder._vector_store = mock_vstore
+            builder._bm25_store = mock_bm25
+            builder._metadata_writer = mock_writer
+
+            stats = builder.build_index(["v1"], force=True)
+
+            # Embedder SHOULD have been called despite matching count
+            mock_embedder.embed_batch.assert_called()
+            assert stats.get("skipped_videos", 0) == 0
