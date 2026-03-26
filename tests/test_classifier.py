@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from videosearch.config import Settings
-from videosearch.classifier import GeminiQueryClassifier
+from videosearch.classifier import GeminiQueryClassifier, WEIGHT_POLICY
 from videosearch.protocols import Classifier
 
 
@@ -174,6 +174,19 @@ class TestCacheKeyFormat:
         ).hexdigest()[:16]
         cache_file = settings.classifier_cache_dir / f"{expected_key}.json"
         assert cache_file.exists()
+
+
+class TestClassifierFallback:
+    def test_classifier_falls_back_to_mixed_on_api_failure(self, settings, mock_genai):
+        """API failures should not abort search; classifier falls back to mixed."""
+        mock_client = mock_genai.return_value
+        mock_client.models.generate_content.side_effect = RuntimeError("boom")
+
+        classifier = GeminiQueryClassifier(settings)
+        result = classifier.classify("Find something")
+
+        assert result["query_type"] == "mixed"
+        assert result["weights"] == WEIGHT_POLICY["mixed"]
 
 
 class TestClassifierProtocol:

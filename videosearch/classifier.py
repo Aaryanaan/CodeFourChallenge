@@ -8,6 +8,7 @@ API calls.
 
 import hashlib
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,6 +16,8 @@ from google import genai
 from google.genai import types
 
 from videosearch.config import Settings
+
+logger = logging.getLogger(__name__)
 
 CLASSIFIER_SYSTEM_PROMPT = """You classify search queries for a body-worn camera video search system.
 
@@ -95,19 +98,24 @@ class GeminiQueryClassifier:
         if cached is not None:
             return {"query_type": cached["query_type"], "weights": cached["weights"]}
 
-        # Call Gemini Flash for classification
-        response = self._client.models.generate_content(
-            model=self._model,
-            contents=[f'Classify this query: "{query}"'],
-            config=types.GenerateContentConfig(
-                system_instruction=CLASSIFIER_SYSTEM_PROMPT,
-                response_mime_type="application/json",
-                temperature=0.0,
-            ),
-        )
-
-        parsed = json.loads(response.text)
-        query_type = parsed.get("query_type", "mixed")
+        try:
+            response = self._client.models.generate_content(
+                model=self._model,
+                contents=[f'Classify this query: "{query}"'],
+                config=types.GenerateContentConfig(
+                    system_instruction=CLASSIFIER_SYSTEM_PROMPT,
+                    response_mime_type="application/json",
+                    temperature=0.0,
+                ),
+            )
+            parsed = json.loads(response.text)
+            query_type = parsed.get("query_type", "mixed")
+        except Exception:
+            logger.warning(
+                "Classifier failed, falling back to mixed weights",
+                exc_info=True,
+            )
+            query_type = "mixed"
 
         # Override LLM-returned weights with locked policy values
         if query_type not in WEIGHT_POLICY:

@@ -5,22 +5,25 @@ from pathlib import Path
 import lancedb
 import pyarrow as pa
 
-VECTOR_DIM = 768
+_DEFAULT_VECTOR_DIM = 768
 
-CHUNKS_SCHEMA = pa.schema([
-    pa.field("vector", pa.list_(pa.float32(), VECTOR_DIM)),
-    pa.field("video_id", pa.string()),
-    pa.field("chunk_index", pa.int32()),
-    pa.field("start_time", pa.float64()),
-    pa.field("end_time", pa.float64()),
-    pa.field("duration", pa.float64()),
-    pa.field("combined_text", pa.string()),
-    pa.field("volume_level", pa.string()),   # "quiet" | "normal" | "loud" (D-05)
-    pa.field("has_speech", pa.bool_()),       # (D-06)
-    pa.field("has_ocr", pa.bool_()),          # (D-06)
-    pa.field("has_raised_voice", pa.bool_()), # (D-06)
-    pa.field("scene_type", pa.string()),
-])
+
+def _chunks_schema(dim: int = _DEFAULT_VECTOR_DIM) -> pa.Schema:
+    """Build LanceDB schema with the given vector dimensionality."""
+    return pa.schema([
+        pa.field("vector", pa.list_(pa.float32(), dim)),
+        pa.field("video_id", pa.string()),
+        pa.field("chunk_index", pa.int32()),
+        pa.field("start_time", pa.float64()),
+        pa.field("end_time", pa.float64()),
+        pa.field("duration", pa.float64()),
+        pa.field("combined_text", pa.string()),
+        pa.field("volume_level", pa.string()),   # "quiet" | "normal" | "loud" (D-05)
+        pa.field("has_speech", pa.bool_()),       # (D-06)
+        pa.field("has_ocr", pa.bool_()),          # (D-06)
+        pa.field("has_raised_voice", pa.bool_()), # (D-06)
+        pa.field("scene_type", pa.string()),
+    ])
 
 
 class LanceVectorStore:
@@ -30,17 +33,18 @@ class LanceVectorStore:
     Upsert by compound key (video_id, chunk_index) per D-13.
     """
 
-    def __init__(self, index_dir: str | Path = "data/index"):
+    def __init__(self, index_dir: str | Path = "data/index", vector_dim: int = _DEFAULT_VECTOR_DIM):
         self._index_dir = Path(index_dir)
         self._lancedb_dir = self._index_dir / "lancedb"
         self._lancedb_dir.mkdir(parents=True, exist_ok=True)
         self._db = lancedb.connect(str(self._lancedb_dir))
+        self._schema = _chunks_schema(vector_dim)
         self._table = None
 
     def _get_table(self):
         if self._table is None:
             self._table = self._db.create_table(
-                "chunks", schema=CHUNKS_SCHEMA, exist_ok=True
+                "chunks", schema=self._schema, exist_ok=True
             )
         return self._table
 

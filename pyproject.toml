@@ -2,8 +2,9 @@
 name = "videosearch"
 version = "0.1.0"
 description = "Natural language search for body-worn camera footage"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
+    "numpy>=1.26,<2",
     "pydantic>=2.12",
     "pydantic-settings>=2.13",
     "scenedetect[opencv]>=0.6.7",

@@ -91,6 +91,8 @@ class IngestionPipeline:
 
         # Step 2: Chunk
         chunks = self._chunker.chunk(compressed_path)
+        for chunk in chunks:
+            chunk.video_id = video_id
 
         # Step 3: Extract per chunk (parallel within each chunk)
         for chunk in chunks:

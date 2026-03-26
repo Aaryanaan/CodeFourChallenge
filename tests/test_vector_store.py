@@ -6,7 +6,7 @@ All tests use tmp_path for isolated LanceDB directories.
 import pytest
 
 from videosearch.protocols import VectorStore
-from videosearch.vector_store import CHUNKS_SCHEMA, VECTOR_DIM, LanceVectorStore
+from videosearch.vector_store import _chunks_schema, _DEFAULT_VECTOR_DIM as VECTOR_DIM, LanceVectorStore
 
 
 @pytest.fixture

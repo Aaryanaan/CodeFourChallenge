@@ -103,6 +103,7 @@ class ClaudeReranker:
                 timeout=60.0,
             )
 
+            response.raise_for_status()
             data = response.json()
             content = data["choices"][0]["message"]["content"]
 

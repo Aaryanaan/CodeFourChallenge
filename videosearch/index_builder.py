@@ -85,7 +85,8 @@ class IndexBuilder:
         self._settings = settings or Settings()
         self._embedder = GeminiEmbedder(self._settings)
         self._vector_store = LanceVectorStore(
-            index_dir=self._settings.index_dir
+            index_dir=self._settings.index_dir,
+            vector_dim=self._settings.embedding_dimensions,
         )
         self._bm25_store = BM25Store()
         self._metadata_writer = MetadataWriter(

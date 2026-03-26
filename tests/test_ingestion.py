@@ -204,6 +204,19 @@ def test_ingest_calls_chunk(tmp_path, mock_components):
     mock_chunker.chunk.assert_called_once_with(compressed_path)
 
 
+def test_ingest_normalizes_chunk_video_id_from_compressed_filename(tmp_path, mock_components):
+    """Chunks created from bodycam_001_720p.mp4 are rewritten back to bodycam_001."""
+    pipeline, _settings, chunks, _compressed_path = _build_pipeline(
+        tmp_path,
+        mock_components,
+        video_id="bodycam_001_720p",
+    )
+
+    pipeline.ingest("/path/to/bodycam_001.mp4")
+
+    assert all(chunk.video_id == "bodycam_001" for chunk in chunks)
+
+
 def test_ingest_runs_extractors_per_chunk(tmp_path, mock_components):
     """For 2 chunks, each extractor is called 2 times with correct args."""
     pipeline, settings, chunks, compressed_path = _build_pipeline(

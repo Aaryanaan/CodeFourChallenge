@@ -7,6 +7,7 @@ on API failure, markdown fence stripping, and protocol conformance.
 import json
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from videosearch.config import Settings
@@ -117,6 +118,24 @@ class TestRerankDegradation:
         assert result[0]["video_id"] == "video_0"
         assert result[1]["video_id"] == "video_1"
         assert result[2]["video_id"] == "video_2"
+
+
+class TestRerankHttpErrorDegradation:
+    def test_rerank_http_error_degrades_gracefully(self, settings):
+        """On HTTP 402/429/500 error, reranker returns original candidates[:top_k]."""
+        candidates = _make_candidates(5)
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "402 Payment Required", request=MagicMock(), response=MagicMock(status_code=402)
+        )
+
+        with patch("videosearch.reranker.httpx.post", return_value=mock_response):
+            reranker = ClaudeReranker(settings)
+            result = reranker.rerank("test query", candidates, top_k=3)
+
+        assert len(result) == 3
+        assert result[0]["video_id"] == "video_0"
 
 
 class TestRerankJsonParseStripsFences:

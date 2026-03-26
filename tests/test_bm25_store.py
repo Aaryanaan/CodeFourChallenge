@@ -92,6 +92,18 @@ class TestBM25Store:
             assert "score" in r
             assert r["score"] > 0
 
+    def test_search_returns_chunk_metadata_fields(self, sample_chunks):
+        """BM25 results include the fields the retriever/CLI expect downstream."""
+        store = BM25Store()
+        store.build(sample_chunks)
+        results = store.search("Miranda rights")
+
+        assert len(results) > 0
+        for r in results:
+            assert "start_time" in r
+            assert "end_time" in r
+            assert "combined_text" in r
+
     def test_search_no_match_returns_empty(self, sample_chunks):
         """Search for non-existent word returns []."""
         store = BM25Store()

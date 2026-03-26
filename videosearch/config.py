@@ -26,8 +26,9 @@ class Settings(BaseSettings):
     # ffmpeg
     ffmpeg_path: str = "ffmpeg"
 
-    # PySceneDetect (per D-10)
-    pyscenedetect_threshold: float = 40.0
+    # PySceneDetect — AdaptiveDetector uses adaptive_threshold (default 3.0).
+    # ContentDetector uses 27-40 range but we use AdaptiveDetector for BWC footage.
+    pyscenedetect_threshold: float = 3.0
     chunk_min_duration: float = 10.0
     chunk_max_duration: float = 60.0
     sliding_window_size: float = 30.0

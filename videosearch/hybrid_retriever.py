@@ -85,7 +85,7 @@ class HybridRetriever:
         reranker: Reranker | None = None,
     ) -> None:
         self._embedder = GeminiEmbedder(settings)
-        self._vector_store = LanceVectorStore(index_dir=settings.index_dir)
+        self._vector_store = LanceVectorStore(index_dir=settings.index_dir, vector_dim=settings.embedding_dimensions)
         self._bm25_store = BM25Store()
         self._bm25_loaded = False
 
@@ -196,7 +196,8 @@ class HybridRetriever:
     def _detect_filters(self, query: str) -> str | None:
         """Detect modality-specific filter expressions from query text.
 
-        Heuristic keyword matching. Phase 6 will replace with LLM classifier.
+        Legacy heuristic fallback — used only when no Classifier is injected.
+        When a classifier is present, _map_filter() is called instead.
 
         Returns:
             A LanceDB filter expression string, or None if no filter applies.

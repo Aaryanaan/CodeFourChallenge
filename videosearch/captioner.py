@@ -124,15 +124,18 @@ class GeminiCaptioner:
         """
         fd, tmp_path = tempfile.mkstemp(suffix=".mp4")
         os.close(fd)
+        # Use -ss after -i for frame-accurate seeking. Re-encode is needed
+        # because stream copy (-c copy) snaps to the nearest keyframe, which
+        # can send wrong frames to the captioning model near chunk boundaries.
         subprocess.run(
             [
                 self._ffmpeg_path,
                 "-y",
-                "-ss", str(start),
                 "-i", video_path,
+                "-ss", str(start),
                 "-t", str(end - start),
-                "-c", "copy",
                 "-an",
+                "-crf", "28",
                 tmp_path,
             ],
             check=True,

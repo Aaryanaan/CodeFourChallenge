@@ -18,7 +18,7 @@ def test_settings_defaults():
     assert settings.ffmpeg_path == "ffmpeg"
 
     # PySceneDetect
-    assert settings.pyscenedetect_threshold == 40.0
+    assert settings.pyscenedetect_threshold == 3.0
     assert settings.chunk_min_duration == 10.0
     assert settings.chunk_max_duration == 60.0
     assert settings.sliding_window_size == 30.0

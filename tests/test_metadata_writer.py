@@ -76,14 +76,14 @@ class TestMetadataWriterWrite:
     def test_write_creates_json_file(self, tmp_metadata_dir):
         writer = MetadataWriter(metadata_dir=tmp_metadata_dir)
         chunks = [_make_basic_chunk()]
-        path = writer.write("vid001", chunks)
+        path = writer.write("test_video", chunks)
         assert path.exists()
-        assert path.name == "vid001.json"
+        assert path.name == "test_video.json"
 
     def test_write_creates_list_of_serialized_chunks(self, tmp_metadata_dir):
         writer = MetadataWriter(metadata_dir=tmp_metadata_dir)
         chunks = [_make_basic_chunk(0), _make_basic_chunk(1)]
-        path = writer.write("vid002", chunks)
+        path = writer.write("test_video", chunks)
         data = json.loads(path.read_text())
         assert isinstance(data, list)
         assert len(data) == 2
@@ -95,14 +95,14 @@ class TestMetadataWriterWrite:
         assert not new_dir.exists()
         writer = MetadataWriter(metadata_dir=new_dir)
         chunks = [_make_basic_chunk()]
-        path = writer.write("vid003", chunks)
+        path = writer.write("test_video", chunks)
         assert new_dir.exists()
         assert path.exists()
 
     def test_write_enriched_chunk_serializes_correctly(self, tmp_metadata_dir):
         writer = MetadataWriter(metadata_dir=tmp_metadata_dir)
         chunks = [_make_enriched_chunk()]
-        path = writer.write("vid_enriched", chunks)
+        path = writer.write("test_video", chunks)
         data = json.loads(path.read_text())
         assert data[0]["transcript"] is not None
         assert data[0]["transcript"][0]["text"] == "Hello world"
@@ -113,7 +113,7 @@ class TestMetadataWriterWrite:
         """ChunkMetadata with None extraction fields serializes correctly."""
         writer = MetadataWriter(metadata_dir=tmp_metadata_dir)
         chunks = [_make_basic_chunk()]
-        path = writer.write("vid_basic", chunks)
+        path = writer.write("test_video", chunks)
         data = json.loads(path.read_text())
         assert data[0]["transcript"] is None
         assert data[0]["audio_features"] is None
@@ -126,8 +126,8 @@ class TestMetadataWriterLoad:
     def test_load_returns_list_of_chunk_metadata(self, tmp_metadata_dir):
         writer = MetadataWriter(metadata_dir=tmp_metadata_dir)
         original = [_make_basic_chunk(0), _make_basic_chunk(1)]
-        writer.write("vid_load", original)
-        loaded = writer.load("vid_load")
+        writer.write("test_video", original)
+        loaded = writer.load("test_video")
         assert isinstance(loaded, list)
         assert len(loaded) == 2
         assert all(isinstance(c, ChunkMetadata) for c in loaded)
@@ -167,8 +167,8 @@ class TestMetadataWriterRoundTrip:
     def test_write_and_load(self, tmp_metadata_dir):
         writer = MetadataWriter(metadata_dir=tmp_metadata_dir)
         original = [_make_enriched_chunk(0), _make_basic_chunk(1)]
-        writer.write("vid_roundtrip", original)
-        loaded = writer.load("vid_roundtrip")
+        writer.write("test_video", original)
+        loaded = writer.load("test_video")
 
         assert len(loaded) == len(original)
         for orig, load in zip(original, loaded):
@@ -198,6 +198,6 @@ class TestMetadataWriterRoundTrip:
         """Pydantic model equality check after round-trip."""
         writer = MetadataWriter(metadata_dir=tmp_metadata_dir)
         original = [_make_enriched_chunk()]
-        writer.write("vid_eq", original)
-        loaded = writer.load("vid_eq")
+        writer.write("test_video", original)
+        loaded = writer.load("test_video")
         assert original == loaded

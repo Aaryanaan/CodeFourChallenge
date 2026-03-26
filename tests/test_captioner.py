@@ -73,7 +73,7 @@ def test_caption_returns_dict_with_caption_key(mock_settings, mock_genai_client,
 
 
 def test_caption_calls_ffmpeg_with_correct_flags(mock_settings, mock_genai_client, tmp_path):
-    """caption() calls ffmpeg with -ss, -t, -c copy, -an flags."""
+    """caption() calls ffmpeg with -ss after -i for frame-accurate seeking, -an, and -crf."""
     captioner, mock_client = _make_captioner(mock_settings, mock_genai_client)
 
     mock_uploaded = MagicMock()
@@ -96,11 +96,13 @@ def test_caption_calls_ffmpeg_with_correct_flags(mock_settings, mock_genai_clien
 
         mock_run.assert_called_once()
         call_args = mock_run.call_args[0][0]
-        assert "-ss" in call_args
+        # -i must come BEFORE -ss for frame-accurate seeking (not keyframe-aligned)
+        i_idx = call_args.index("-i")
+        ss_idx = call_args.index("-ss")
+        assert i_idx < ss_idx, "-ss must come after -i for frame-accurate seek"
         assert "-t" in call_args
-        assert "-c" in call_args
-        assert "copy" in call_args
         assert "-an" in call_args
+        assert "-crf" in call_args
 
 
 def test_caption_calls_upload_and_generate_content(mock_settings, mock_genai_client, tmp_path):
@@ -198,6 +200,62 @@ def test_caption_returns_cached_value_without_api_call(mock_settings, mock_genai
 
     assert result["caption"] == cache_data["caption"]
     assert result.get("cached") is True
+
+
+def test_caption_polls_until_active(mock_settings, mock_genai_client, tmp_path):
+    """caption() polls files.get() while state is PROCESSING, then calls generate_content."""
+    captioner, mock_client = _make_captioner(mock_settings, mock_genai_client)
+
+    processing_file = MagicMock()
+    processing_file.name = "files/processing-file"
+    processing_file.state.name = "PROCESSING"
+
+    active_file = MagicMock()
+    active_file.name = "files/processing-file"
+    active_file.state.name = "ACTIVE"
+
+    mock_client.files.upload.return_value = processing_file
+    mock_client.files.get.return_value = active_file
+
+    mock_response = MagicMock()
+    mock_response.text = "Clothing: uniform\nActions: walking\nObjects: car\nText: none\nLighting: day"
+    mock_client.models.generate_content.return_value = mock_response
+
+    with patch("videosearch.captioner.subprocess.run"), \
+         patch("videosearch.captioner.tempfile.mkstemp") as mock_mkstemp, \
+         patch("os.close"), \
+         patch("os.unlink"), \
+         patch("videosearch.captioner.time.sleep") as mock_sleep:
+        mock_mkstemp.return_value = (5, str(tmp_path / "tmp_clip.mp4"))
+
+        result = captioner.caption(str(tmp_path / "video.mp4"), 0.0, 30.0)
+
+    # get() called once to poll out of PROCESSING
+    mock_client.files.get.assert_called_once_with(name="files/processing-file")
+    mock_sleep.assert_called_once_with(1)
+    mock_client.models.generate_content.assert_called_once()
+    assert "caption" in result
+
+
+def test_caption_chunk_index_controls_cache_key(mock_settings, mock_genai_client, tmp_path):
+    """When chunk_index is passed explicitly, it — not int(start) — determines the cache key."""
+    captioner, mock_client = _make_captioner(mock_settings, mock_genai_client)
+
+    # Pre-populate cache for chunk_index=7 (start=0.0, so int(start) would be 0)
+    cache_dir = tmp_path / "cache" / "captions" / "video"
+    cache_dir.mkdir(parents=True)
+    cache_file = cache_dir / "7.json"
+    cache_file.write_text('{"caption": "cached via chunk_index", "model": "x", "cached_at": "2024-01-01T00:00:00+00:00"}')
+
+    result = captioner.caption(str(tmp_path / "video.mp4"), 0.0, 30.0, chunk_index=7)
+
+    # Should hit cache (chunk_index=7), not call API
+    mock_client.files.upload.assert_not_called()
+    assert result["cached"] is True
+    assert result["caption"] == "cached via chunk_index"
+
+    # Verify chunk_index=0 cache does NOT exist (proving key was 7, not int(0.0)=0)
+    assert not (cache_dir / "0.json").exists()
 
 
 def test_caption_writes_cache_on_miss(mock_settings, mock_genai_client, tmp_path):

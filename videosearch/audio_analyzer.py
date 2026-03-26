@@ -9,7 +9,13 @@ This is a two-pass design -- analyze() sets has_raised_voice=False,
 and the caller invokes detect_raised_voice() after all chunks are processed.
 """
 
+import os
+import tempfile
 from pathlib import Path
+
+_NUMBA_CACHE_DIR = Path(tempfile.gettempdir()) / "videosearch-numba-cache"
+_NUMBA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("NUMBA_CACHE_DIR", str(_NUMBA_CACHE_DIR))
 
 import librosa
 import numpy as np
