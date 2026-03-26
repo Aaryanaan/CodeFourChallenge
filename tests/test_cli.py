@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from videosearch.cli import app
+from videosearch.cli import app, _print_results, EVAL_QUERIES
 
 runner = CliRunner()
 
@@ -195,7 +195,10 @@ MOCK_RESULTS = [
         "start_time": 30.0,
         "end_time": 60.0,
         "combined_text": "Miranda rights read aloud to suspect",
+        "transcript_snippet": "Miranda rights read aloud to suspect",
+        "visual_caption": "Officer standing beside vehicle at night",
         "rrf_score": 0.016,
+        "reasoning": "Matches Miranda rights query exactly",
     },
     {
         "video_id": "bodycam_002",
@@ -203,7 +206,10 @@ MOCK_RESULTS = [
         "start_time": 10.0,
         "end_time": 40.0,
         "combined_text": "Officer reading rights at scene",
+        "transcript_snippet": "Officer reading rights at scene",
+        "visual_caption": "Officer at traffic stop",
         "rrf_score": 0.012,
+        "reasoning": "Related rights reading",
     },
 ]
 
@@ -352,6 +358,7 @@ def test_estimate_fallback_no_metadata():
 
                 mock_proc = MagicMock()
                 mock_proc.stdout = "300.0\n"
+                mock_proc.returncode = 0
 
                 with patch("subprocess.run", return_value=mock_proc):
                     result = runner.invoke(app, ["estimate", "test_video.mp4"])
@@ -405,6 +412,7 @@ def test_caption_command_success():
 
     mock_captioner_instance = MagicMock()
     mock_captioner_instance.caption.return_value = {"caption": "Clothing: uniform", "cached": False}
+    mock_captioner_instance.is_cached.return_value = False
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
@@ -421,6 +429,7 @@ def test_caption_command_success():
                     mock_settings.caption_cache_dir = tmp_path / "captions"
                     mock_settings.caption_cost_per_chunk = 0.003
                     mock_settings.caption_cost_ceiling = 5.0
+                    mock_settings.total_budget_ceiling = 30.0
                     mock_settings_cls.return_value = mock_settings
 
                     result = runner.invoke(app, ["caption", "test_video.mp4", "--yes"])
@@ -480,14 +489,18 @@ def test_caption_command_exceeds_ceiling():
         compressed_dir.mkdir()
         (compressed_dir / "test_video_720p.mp4").write_bytes(b"")
 
+        mock_captioner_instance = MagicMock()
+        mock_captioner_instance.is_cached.return_value = False
+
         with patch("videosearch.cli.MetadataWriter", return_value=mock_writer_instance):
-            with patch("videosearch.cli.GeminiCaptioner"):
+            with patch("videosearch.cli.GeminiCaptioner", return_value=mock_captioner_instance):
                 with patch("videosearch.cli.Settings") as mock_settings_cls:
                     mock_settings = MagicMock()
                     mock_settings.video_dir = tmp_path
                     mock_settings.caption_cache_dir = tmp_path / "captions"
                     mock_settings.caption_cost_per_chunk = 0.003
                     mock_settings.caption_cost_ceiling = 5.0
+                    mock_settings.total_budget_ceiling = 30.0
                     mock_settings_cls.return_value = mock_settings
 
                     result = runner.invoke(app, ["caption", "test_video.mp4", "--yes"])
@@ -529,6 +542,7 @@ def test_caption_command_partial_failure():
         Exception("API timeout"),                             # chunk 1: fail
         {"caption": "Actions: walking", "cached": False},    # chunk 2: success
     ]
+    mock_captioner_instance.is_cached.return_value = False
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
@@ -544,6 +558,7 @@ def test_caption_command_partial_failure():
                     mock_settings.caption_cache_dir = tmp_path / "captions"
                     mock_settings.caption_cost_per_chunk = 0.003
                     mock_settings.caption_cost_ceiling = 5.0
+                    mock_settings.total_budget_ceiling = 30.0
                     mock_settings_cls.return_value = mock_settings
 
                     result = runner.invoke(app, ["caption", "test_video.mp4", "--yes"])
@@ -576,10 +591,12 @@ def test_caption_multi_video_cumulative_budget():
                for i in range(3)]
 
     mock_writer_instance = MagicMock()
-    mock_writer_instance.load.side_effect = [chunks1, chunks2]
+    # Pre-scan loads both videos for cost estimation, then main loop loads them again
+    mock_writer_instance.load.side_effect = [chunks1, chunks2, chunks1, chunks2]
 
     mock_captioner_instance = MagicMock()
     mock_captioner_instance.caption.return_value = {"caption": "test caption", "cached": False}
+    mock_captioner_instance.is_cached.return_value = False
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
@@ -596,6 +613,7 @@ def test_caption_multi_video_cumulative_budget():
                     mock_settings.caption_cache_dir = tmp_path / "captions"
                     mock_settings.caption_cost_per_chunk = 0.003
                     mock_settings.caption_cost_ceiling = 5.0
+                    mock_settings.total_budget_ceiling = 30.0
                     mock_settings_cls.return_value = mock_settings
 
                     result = runner.invoke(app, ["caption", "vid1.mp4", "vid2.mp4", "--yes"])
@@ -603,3 +621,67 @@ def test_caption_multi_video_cumulative_budget():
     assert result.exit_code == 0, f"Expected exit 0, got {result.exit_code}: {result.output}"
     assert "Spent:" in result.output
     assert "2 succeeded" in result.output
+
+
+# ---------------------------------------------------------------------------
+# _print_results panels
+# ---------------------------------------------------------------------------
+
+
+def test_print_results_panels():
+    """_print_results renders Rich Panels with rank, video_id, time range, and labels."""
+    from io import StringIO
+    from rich.console import Console as RichConsole
+
+    sio = StringIO()
+    test_console = RichConsole(file=sio, width=200)
+
+    with patch("videosearch.cli.console", test_console):
+        _print_results(MOCK_RESULTS, "test query")
+
+    output = sio.getvalue()
+    assert "Results for" in output
+    assert "test query" in output
+    assert "bodycam_001" in output
+    assert "30.0s" in output
+    assert "Score:" in output
+    assert "Transcript:" in output
+    assert "Reasoning:" in output
+
+
+# ---------------------------------------------------------------------------
+# batch-eval command
+# ---------------------------------------------------------------------------
+
+
+def test_batch_eval_command():
+    """batch-eval runs 6 queries and renders comparison table."""
+    mock_retriever_instance = MagicMock()
+    mock_retriever_instance.retrieve.return_value = MOCK_RESULTS
+
+    with patch("videosearch.cli.HybridRetriever", return_value=mock_retriever_instance):
+        with patch("videosearch.cli.GeminiQueryClassifier"):
+            with patch("videosearch.cli.ClaudeReranker"):
+                with patch("videosearch.cli.Settings"):
+                    result = runner.invoke(app, ["batch-eval"])
+
+    assert result.exit_code == 0, f"Expected exit 0, got {result.exit_code}: {result.output}"
+    assert "Batch Evaluation" in result.output
+    assert "vehicle" in result.output or "pulled" in result.output
+    assert "bodycam" in result.output
+    assert mock_retriever_instance.retrieve.call_count == 6
+
+
+def test_batch_eval_no_results():
+    """batch-eval handles queries returning no results."""
+    mock_retriever_instance = MagicMock()
+    mock_retriever_instance.retrieve.return_value = []
+
+    with patch("videosearch.cli.HybridRetriever", return_value=mock_retriever_instance):
+        with patch("videosearch.cli.GeminiQueryClassifier"):
+            with patch("videosearch.cli.ClaudeReranker"):
+                with patch("videosearch.cli.Settings"):
+                    result = runner.invoke(app, ["batch-eval"])
+
+    assert result.exit_code == 0, f"Expected exit 0, got {result.exit_code}: {result.output}"
+    assert "No results" in result.output or "-" in result.output
