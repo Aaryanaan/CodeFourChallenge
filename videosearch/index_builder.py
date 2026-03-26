@@ -92,19 +92,29 @@ class IndexBuilder:
             metadata_dir=self._settings.metadata_dir
         )
 
-    def build_index(self, video_ids: list[str]) -> dict:
+    def _is_video_indexed(self, video_id: str, expected_chunks: int) -> bool:
+        """Check if video already has expected number of rows in vector store (D-05)."""
+        existing = self._vector_store.count_by_video(video_id)
+        return existing == expected_chunks
+
+    def build_index(self, video_ids: list[str], force: bool = False) -> dict:
         """Build full index for given videos. Returns stats dict.
 
-        1. Load all chunks from metadata files
+        1. Load all chunks from metadata files (skip already-indexed per IDX-05)
         2. Compute derived fields (combined_text, volume_level, flags)
         3. Embed non-empty chunks via GeminiEmbedder
         4. Upsert into LanceDB vector store
         5. Build + save BM25 index from transcripts
         """
-        # Step 1: Load all chunks
+        # Step 1: Load all chunks, with incremental skip detection
         all_chunks: list[ChunkMetadata] = []
+        skipped_videos: list[str] = []
         for vid in video_ids:
             chunks = self._metadata_writer.load(vid)
+            if not force and self._is_video_indexed(vid, len(chunks)):
+                logger.info("Skipping %s (already indexed, %d chunks)", vid, len(chunks))
+                skipped_videos.append(vid)
+                continue
             all_chunks.extend(chunks)
             logger.info("Loaded %d chunks from %s", len(chunks), vid)
 
@@ -182,5 +192,6 @@ class IndexBuilder:
             "total_chunks": len(all_chunks),
             "embedded_chunks": len(rows_to_embed),
             "skipped_chunks": len(all_chunks) - len(rows_to_embed),
+            "skipped_videos": len(skipped_videos),
             "bm25_indexed": self._bm25_store._corpus_size,
         }

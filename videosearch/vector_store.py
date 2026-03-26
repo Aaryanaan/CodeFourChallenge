@@ -59,6 +59,11 @@ class LanceVectorStore:
         """Return the number of rows in the vector store."""
         return self._get_table().count_rows()
 
+    def count_by_video(self, video_id: str) -> int:
+        """Count existing rows for a video_id. Used for incremental skip detection (IDX-05)."""
+        table = self._get_table()
+        return table.count_rows(filter=f"video_id = '{video_id}'")
+
     def search(
         self,
         vector: list[float],

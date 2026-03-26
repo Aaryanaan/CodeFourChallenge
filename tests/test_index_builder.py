@@ -191,15 +191,16 @@ class TestBuildCombinedTextWithCaption:
 # --- Incremental indexing tests (IDX-05, D-05, D-07) ---
 
 class TestIncrementalIndexing:
-    def test_build_index_skips_indexed_video(self):
+    def test_build_index_skips_indexed_video(self, tmp_path):
         """When count_by_video matches chunk count, embedder.embed_batch is NOT called."""
         from unittest.mock import MagicMock, patch
 
         chunks_v1 = [_make_chunk(video_id="v1", chunk_index=i, transcript_texts=["hello"]) for i in range(3)]
 
         mock_settings = MagicMock()
-        mock_settings.index_dir = "/tmp/test_idx"
-        mock_settings.metadata_dir = "/tmp/test_meta"
+        mock_settings.index_dir = tmp_path / "index"
+        mock_settings.metadata_dir = tmp_path / "metadata"
+        mock_settings.metadata_dir.mkdir(parents=True, exist_ok=True)
         mock_settings.embedding_batch_size = 50
         mock_settings.raised_voice_stddev_threshold = 2.0
 
@@ -219,9 +220,6 @@ class TestIncrementalIndexing:
             mock_bm25 = MockBM25.return_value
             mock_bm25._corpus_size = 0
 
-            # Mock metadata_dir.glob for BM25 rebuild
-            mock_settings.metadata_dir.glob.return_value = []
-
             from videosearch.index_builder import IndexBuilder
             builder = IndexBuilder.__new__(IndexBuilder)
             builder._settings = mock_settings
@@ -236,15 +234,16 @@ class TestIncrementalIndexing:
             mock_embedder.embed_batch.assert_not_called()
             assert stats["skipped_videos"] == 1
 
-    def test_build_index_force_reembeds(self):
+    def test_build_index_force_reembeds(self, tmp_path):
         """When force=True, embedder.embed_batch IS called even for already-indexed video."""
         from unittest.mock import MagicMock, patch
 
         chunks_v1 = [_make_chunk(video_id="v1", chunk_index=i, transcript_texts=["hello"]) for i in range(3)]
 
         mock_settings = MagicMock()
-        mock_settings.index_dir = "/tmp/test_idx"
-        mock_settings.metadata_dir = "/tmp/test_meta"
+        mock_settings.index_dir = tmp_path / "index"
+        mock_settings.metadata_dir = tmp_path / "metadata"
+        mock_settings.metadata_dir.mkdir(parents=True, exist_ok=True)
         mock_settings.embedding_batch_size = 50
         mock_settings.raised_voice_stddev_threshold = 2.0
 
@@ -264,8 +263,6 @@ class TestIncrementalIndexing:
             mock_embedder.embed_batch.return_value = [[0.1] * 768 for _ in range(3)]
             mock_bm25 = MockBM25.return_value
             mock_bm25._corpus_size = 3
-
-            mock_settings.metadata_dir.glob.return_value = []
 
             from videosearch.index_builder import IndexBuilder
             builder = IndexBuilder.__new__(IndexBuilder)
