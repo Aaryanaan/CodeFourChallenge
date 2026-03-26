@@ -672,6 +672,34 @@ def test_batch_eval_command():
     assert mock_retriever_instance.retrieve.call_count == 6
 
 
+# ---------------------------------------------------------------------------
+# serve command
+# ---------------------------------------------------------------------------
+
+
+@patch("uvicorn.run")
+def test_serve_command(mock_uvicorn_run):
+    """serve command starts uvicorn with default host and port."""
+    result = runner.invoke(app, ["serve"])
+    assert result.exit_code == 0
+    assert "http://127.0.0.1:8000" in result.output
+    assert "/docs" in result.output
+    mock_uvicorn_run.assert_called_once_with(
+        "videosearch.server:app", host="127.0.0.1", port=8000
+    )
+
+
+@patch("uvicorn.run")
+def test_serve_command_custom_port(mock_uvicorn_run):
+    """serve command passes custom host and port to uvicorn."""
+    result = runner.invoke(app, ["serve", "--port", "9000", "--host", "0.0.0.0"])
+    assert result.exit_code == 0
+    assert "http://0.0.0.0:9000" in result.output
+    mock_uvicorn_run.assert_called_once_with(
+        "videosearch.server:app", host="0.0.0.0", port=9000
+    )
+
+
 def test_batch_eval_no_results():
     """batch-eval handles queries returning no results."""
     mock_retriever_instance = MagicMock()
