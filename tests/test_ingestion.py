@@ -121,7 +121,7 @@ def mock_components():
         patch("videosearch.ingestion.LibrosaAudioAnalyzer") as MockAudioAnalyzer,
         patch("videosearch.ingestion.PaddleOCRExtractor") as MockOCR,
         patch("videosearch.ingestion.MetadataWriter") as MockWriter,
-        patch("videosearch.ingestion.GeminiCaptioner", create=True) as MockCaptioner,
+        patch("videosearch.ingestion.GeminiCaptioner") as MockCaptioner,
     ):
         yield {
             "Compressor": MockCompressor,

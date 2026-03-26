@@ -11,9 +11,11 @@ Extractor failures are logged as warnings and do not abort the pipeline.
 """
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from videosearch.audio_analyzer import LibrosaAudioAnalyzer
+from videosearch.captioner import GeminiCaptioner
 from videosearch.chunker import SceneAwareChunker
 from videosearch.compressor import FFmpegCompressor
 from videosearch.config import Settings
@@ -53,19 +55,27 @@ class IngestionPipeline:
             frame_interval=settings.ocr_frame_interval,
         )
         self._metadata_writer = MetadataWriter(metadata_dir=settings.metadata_dir)
+        self._captioner: GeminiCaptioner | None = None
 
-    def ingest(self, video_path: str) -> str:
+    def _ensure_captioner(self) -> GeminiCaptioner:
+        """Lazily create captioner on first use."""
+        if self._captioner is None:
+            self._captioner = GeminiCaptioner(self._settings)
+        return self._captioner
+
+    def ingest(self, video_path: str, include_caption: bool = False) -> str:
         """Ingest a video through the full processing pipeline.
 
         Steps:
           1. Compress to 720p h264
           2. Detect scenes and chunk
-          3. Run transcription, audio analysis, and OCR per chunk
+          3. Run transcription, audio analysis, OCR (and optionally captioning) per chunk
           4. Two-pass raised voice detection
           5. Write metadata JSON
 
         Args:
             video_path: Absolute or relative path to the source video.
+            include_caption: When True, run visual captioner as 4th parallel task.
 
         Returns:
             video_id derived from the video filename stem (e.g. "bodycam_001").
@@ -81,9 +91,9 @@ class IngestionPipeline:
         # Step 2: Chunk
         chunks = self._chunker.chunk(compressed_path)
 
-        # Step 3: Extract per chunk
+        # Step 3: Extract per chunk (parallel within each chunk)
         for chunk in chunks:
-            self._extract_chunk(chunk, compressed_path)
+            self._extract_chunk(chunk, compressed_path, include_caption=include_caption)
 
         # Step 4: Two-pass raised voice detection
         video_rms_values = [
@@ -106,47 +116,54 @@ class IngestionPipeline:
 
         return video_id
 
-    def _extract_chunk(self, chunk: ChunkMetadata, video_path: str) -> None:
-        """Run all three extractors on a single chunk.
+    def _extract_chunk(
+        self, chunk: ChunkMetadata, video_path: str, include_caption: bool = False,
+    ) -> None:
+        """Run extractors on a single chunk concurrently via ThreadPoolExecutor.
 
-        Each extractor is tried independently. Failures are logged as warnings
+        Each extractor is submitted independently. Failures are logged as warnings
         and do not abort extraction of other modalities or subsequent chunks.
 
         Args:
             chunk: ChunkMetadata to populate (mutated in place).
             video_path: Path to the compressed video file.
+            include_caption: When True, run captioner as 4th parallel task.
         """
-        # Transcription
-        try:
-            result = self._transcriber.transcribe(
-                video_path, chunk.start_time, chunk.end_time
-            )
-            chunk.transcript = [
-                TranscriptSegment(**seg) for seg in result["segments"]
-            ]
-        except Exception as e:  # noqa: BLE001
-            logger.warning(
-                "Transcription failed for chunk %d: %s", chunk.chunk_index, e
-            )
+        extractors: dict[str, callable] = {
+            "transcribe": lambda: self._run_transcription(chunk, video_path),
+            "audio": lambda: self._run_audio_analysis(chunk, video_path),
+            "ocr": lambda: self._run_ocr(chunk, video_path),
+        }
+        if include_caption:
+            captioner = self._ensure_captioner()
+            extractors["caption"] = lambda: self._run_caption(chunk, video_path, captioner)
 
-        # Audio features
-        try:
-            result = self._audio_analyzer.analyze(
-                video_path, chunk.start_time, chunk.end_time
-            )
-            chunk.audio_features = AudioFeatures(**result)
-        except Exception as e:  # noqa: BLE001
-            logger.warning(
-                "Audio analysis failed for chunk %d: %s", chunk.chunk_index, e
-            )
+        max_workers = 4 if include_caption else 3
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(fn): name for name, fn in extractors.items()}
+            for future in as_completed(futures):
+                name = futures[future]
+                try:
+                    future.result()
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("%s failed for chunk %d: %s", name, chunk.chunk_index, e)
 
-        # OCR
-        try:
-            result = self._ocr_extractor.extract(
-                video_path, chunk.start_time, chunk.end_time
-            )
-            chunk.ocr_results = [OCRResult(**r) for r in result["results"]]
-        except Exception as e:  # noqa: BLE001
-            logger.warning(
-                "OCR extraction failed for chunk %d: %s", chunk.chunk_index, e
-            )
+    def _run_transcription(self, chunk: ChunkMetadata, video_path: str) -> None:
+        """Run transcription on a chunk and populate chunk.transcript."""
+        result = self._transcriber.transcribe(video_path, chunk.start_time, chunk.end_time)
+        chunk.transcript = [TranscriptSegment(**seg) for seg in result["segments"]]
+
+    def _run_audio_analysis(self, chunk: ChunkMetadata, video_path: str) -> None:
+        """Run audio analysis on a chunk and populate chunk.audio_features."""
+        result = self._audio_analyzer.analyze(video_path, chunk.start_time, chunk.end_time)
+        chunk.audio_features = AudioFeatures(**result)
+
+    def _run_ocr(self, chunk: ChunkMetadata, video_path: str) -> None:
+        """Run OCR on a chunk and populate chunk.ocr_results."""
+        result = self._ocr_extractor.extract(video_path, chunk.start_time, chunk.end_time)
+        chunk.ocr_results = [OCRResult(**r) for r in result["results"]]
+
+    def _run_caption(self, chunk: ChunkMetadata, video_path: str, captioner: GeminiCaptioner) -> None:
+        """Run visual captioner on a chunk and populate chunk.visual_caption."""
+        result = captioner.caption(video_path, chunk.start_time, chunk.end_time, chunk.chunk_index)
+        chunk.visual_caption = result["caption"]

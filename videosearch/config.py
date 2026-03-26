@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     caption_cost_ceiling: float = 5.0
     caption_cache_dir: Path = Path("data/cache/captions")
     caption_cost_per_chunk: float = 0.003
+    total_budget_ceiling: float = 30.0  # Total budget for multi-video captioning
 
     # Query Intelligence (Phase 6)
     classifier_model: str = "gemini-2.0-flash"  # Google AI SDK model ID (no google/ prefix)
