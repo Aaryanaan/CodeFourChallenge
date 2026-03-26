@@ -418,5 +418,17 @@ def _print_results(results: list[dict], query: str) -> None:
         console.print(Panel(body, title=title, border_style="blue", padding=(0, 1)))
 
 
+@app.command()
+def serve(
+    port: int = typer.Option(8000, "--port", "-p", help="Port to listen on"),
+    host: str = typer.Option("127.0.0.1", "--host", help="Host to bind to"),
+) -> None:
+    """Start the FastAPI server (Swagger UI at http://<host>:<port>/docs)."""
+    import uvicorn
+    console.print(f"[green]Starting server at http://{host}:{port}[/green]")
+    console.print(f"[green]Swagger UI at http://{host}:{port}/docs[/green]")
+    uvicorn.run("videosearch.server:app", host=host, port=port)
+
+
 if __name__ == "__main__":
     app()
