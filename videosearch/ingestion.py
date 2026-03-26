@@ -54,7 +54,7 @@ class IngestionPipeline:
         )
         self._metadata_writer = MetadataWriter(metadata_dir=settings.metadata_dir)
 
-    def ingest(self, video_path: str) -> str:
+    def ingest(self, video_path: str, include_caption: bool = False) -> str:
         """Ingest a video through the full processing pipeline.
 
         Steps:
@@ -63,9 +63,11 @@ class IngestionPipeline:
           3. Run transcription, audio analysis, and OCR per chunk
           4. Two-pass raised voice detection
           5. Write metadata JSON
+          6. (Optional) Generate visual captions if include_caption=True
 
         Args:
             video_path: Absolute or relative path to the source video.
+            include_caption: If True, run visual captioning after extraction.
 
         Returns:
             video_id derived from the video filename stem (e.g. "bodycam_001").
@@ -103,6 +105,24 @@ class IngestionPipeline:
 
         # Step 5: Write metadata
         self._metadata_writer.write(video_id, chunks)
+
+        # Step 6: Optional visual captioning (D-02)
+        if include_caption:
+            from videosearch.captioner import GeminiCaptioner
+
+            captioner = GeminiCaptioner(self._settings)
+            for chunk in chunks:
+                try:
+                    result = captioner.caption(
+                        compressed_path, chunk.start_time, chunk.end_time, chunk.chunk_index
+                    )
+                    chunk.visual_caption = result["caption"]
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "Caption failed for chunk %d: %s", chunk.chunk_index, e
+                    )
+            # Re-write metadata with captions
+            self._metadata_writer.write(video_id, chunks)
 
         return video_id
 

@@ -31,22 +31,40 @@ console = Console()
 
 @app.command()
 def ingest(
-    video: str = typer.Argument(..., help="Path to video file"),
+    videos: list[str] = typer.Argument(..., help="Path(s) to video file(s)"),
+    caption: bool = typer.Option(False, "--caption", help="Include visual captioning (per D-02)"),
 ) -> None:
-    """Process a video file through the full ingestion pipeline."""
-    if not Path(video).exists():
-        console.print(f"[red]Error:[/red] Video not found: {video}")
-        raise typer.Exit(code=1)
-
+    """Process video file(s) through the full ingestion pipeline."""
     settings = Settings()
     pipeline = IngestionPipeline(settings)
-    video_id = pipeline.ingest(str(Path(video)))
-    console.print(f"[green]Ingested:[/green] {video_id}")
+    succeeded: list[str] = []
+    failed: list[tuple[str, str]] = []
+
+    for video in videos:
+        if not Path(video).exists():
+            failed.append((video, "File not found"))
+            console.print(f"  [red]FAILED {Path(video).name}: File not found[/red]")
+            continue
+        try:
+            video_id = pipeline.ingest(str(Path(video)), include_caption=caption)
+            succeeded.append(video_id)
+            console.print(f"  [{len(succeeded)}/{len(videos)}] [green]Ingested: {video_id}[/green]")
+        except Exception as e:
+            failed.append((video, str(e)))
+            console.print(f"  [red]FAILED {Path(video).name}: {e}[/red]")
+
+    # Summary (per D-10)
+    console.print(f"\n[green]Done:[/green] {len(succeeded)} succeeded, {len(failed)} failed")
+    if failed:
+        for path, err in failed:
+            console.print(f"  [red]-[/red] {path}: {err}")
+        raise typer.Exit(code=1)
 
 
 @app.command()
 def index(
     video_ids: list[str] = typer.Argument(None, help="Video IDs to index (default: all)"),
+    force: bool = typer.Option(False, "--force", help="Re-embed all videos (ignore cache)"),
 ) -> None:
     """Build search indices from ingested metadata."""
     settings = Settings()
@@ -59,10 +77,11 @@ def index(
         raise typer.Exit(code=1)
 
     builder = IndexBuilder(settings)
-    stats = builder.build_index(video_ids)
+    stats = builder.build_index(video_ids, force=force)
     console.print(
         f"[green]Indexed:[/green] {stats['total_chunks']} chunks "
-        f"({stats['embedded_chunks']} embedded, {stats['bm25_indexed']} BM25)"
+        f"({stats['embedded_chunks']} embedded, {stats.get('skipped_videos', 0)} videos skipped, "
+        f"{stats['bm25_indexed']} BM25)"
     )
 
 
@@ -148,68 +167,91 @@ def estimate(
 
 @app.command()
 def caption(
-    video: str = typer.Argument(..., help="Path to video file"),
+    videos: list[str] = typer.Argument(..., help="Path(s) to video file(s)"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
-    """Generate visual captions for an ingested video's chunks."""
+    """Generate visual captions for ingested video(s) chunks."""
     settings = Settings()
-    video_id = Path(video).stem
     writer = MetadataWriter(metadata_dir=settings.metadata_dir)
-
-    try:
-        chunks = writer.load(video_id)
-    except FileNotFoundError:
-        console.print(f"[red]Error:[/red] No metadata for {video_id}. Run `ingest` first.")
-        raise typer.Exit(code=1)
-
-    compressed_path = str(settings.video_dir / "compressed" / f"{video_id}_720p.mp4")
-    if not Path(compressed_path).exists():
-        console.print(
-            f"[red]Error:[/red] Compressed video not found: {compressed_path}\n"
-            f"Run `ingest {video}` to generate it."
-        )
-        raise typer.Exit(code=1)
-
-    # Cost preflight: enforce ceiling before any API spend
-    _new_count = sum(
-        1 for c in chunks
-        if not (settings.caption_cache_dir / video_id / f"{c.chunk_index}.json").exists()
-    )
-    _cost = _new_count * settings.caption_cost_per_chunk
-    if _cost > settings.caption_cost_ceiling:
-        console.print(
-            f"[red]Error:[/red] Estimated cost ${_cost:.4f} exceeds ceiling "
-            f"${settings.caption_cost_ceiling:.2f}. Run `estimate {video}` for details."
-        )
-        raise typer.Exit(code=1)
-
     captioner = GeminiCaptioner(settings)
-    cached_count = 0
-    fresh_count = 0
-    failed_count = 0
 
-    for chunk in chunks:
+    succeeded: list[str] = []
+    failed_videos: list[tuple[str, str]] = []
+    cumulative_spend = 0.0
+
+    for idx, video in enumerate(videos, 1):
+        video_id = Path(video).stem
+
         try:
-            result = captioner.caption(compressed_path, chunk.start_time, chunk.end_time, chunk.chunk_index)
-            chunk.visual_caption = result["caption"]
-            if result.get("cached", False):
-                cached_count += 1
-            else:
-                fresh_count += 1
-        except Exception as exc:
-            # D-24: same pattern as all other extractors — log warning, continue.
-            # visual_caption stays None for this chunk. No pipeline abort.
-            failed_count += 1
-            console.print(
-                f"[yellow]Warning:[/yellow] Caption failed for chunk "
-                f"{chunk.chunk_index}: {exc}"
-            )
+            chunks = writer.load(video_id)
+        except FileNotFoundError:
+            failed_videos.append((video, f"No metadata for {video_id}"))
+            console.print(f"  [red]FAILED {video_id}: No metadata. Run `ingest` first.[/red]")
+            continue
 
-    # Always write, even if some chunks failed — preserves partial progress
-    writer.write(video_id, chunks)
-    summary = f"({fresh_count} new, {cached_count} cached)"
-    if failed_count:
-        summary = f"({fresh_count} new, {cached_count} cached, {failed_count} failed)"
-    console.print(f"[green]Captioned:[/green] {video_id} {summary}")
+        compressed_path = str(settings.video_dir / "compressed" / f"{video_id}_720p.mp4")
+        if not Path(compressed_path).exists():
+            failed_videos.append((video, "Compressed video not found"))
+            console.print(f"  [red]FAILED {video_id}: Compressed video not found[/red]")
+            continue
+
+        # Cost preflight: enforce ceiling before any API spend
+        _new_count = sum(
+            1 for c in chunks
+            if not (settings.caption_cache_dir / video_id / f"{c.chunk_index}.json").exists()
+        )
+        _cost = _new_count * settings.caption_cost_per_chunk
+        if _cost > settings.caption_cost_ceiling:
+            failed_videos.append((video, f"Cost ${_cost:.4f} exceeds ceiling"))
+            console.print(
+                f"  [red]FAILED {video_id}: Estimated cost ${_cost:.4f} exceeds ceiling "
+                f"${settings.caption_cost_ceiling:.2f}[/red]"
+            )
+            continue
+
+        cached_count = 0
+        fresh_count = 0
+        failed_count = 0
+
+        for chunk in chunks:
+            try:
+                result = captioner.caption(compressed_path, chunk.start_time, chunk.end_time, chunk.chunk_index)
+                chunk.visual_caption = result["caption"]
+                if result.get("cached", False):
+                    cached_count += 1
+                else:
+                    fresh_count += 1
+            except Exception as exc:
+                failed_count += 1
+                console.print(
+                    f"[yellow]Warning:[/yellow] Caption failed for chunk "
+                    f"{chunk.chunk_index}: {exc}"
+                )
+
+        # Always write, even if some chunks failed
+        writer.write(video_id, chunks)
+        succeeded.append(video_id)
+
+        summary = f"({fresh_count} new, {cached_count} cached)"
+        if failed_count:
+            summary = f"({fresh_count} new, {cached_count} cached, {failed_count} failed)"
+        console.print(f"[green]Captioned:[/green] {video_id} {summary}")
+
+        # Cumulative budget tracking (D-09)
+        cumulative_spend += fresh_count * settings.caption_cost_per_chunk
+        console.print(
+            f"  Video {idx}/{len(videos)} done. "
+            f"Spent: ${cumulative_spend:.4f} / ${settings.caption_cost_ceiling:.2f} budget"
+        )
+
+    # Final summary
+    console.print(
+        f"\n[green]Done:[/green] {len(succeeded)} succeeded, {len(failed_videos)} failed"
+    )
+    if failed_videos:
+        for path, err in failed_videos:
+            console.print(f"  [red]-[/red] {path}: {err}")
+        raise typer.Exit(code=1)
 
 
 def _print_results(results: list[dict], query: str) -> None:
