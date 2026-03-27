@@ -1,5 +1,5 @@
 data/videos/
-data/index/
+data/cache/
 .env
 __pycache__/
 *.egg-info/
