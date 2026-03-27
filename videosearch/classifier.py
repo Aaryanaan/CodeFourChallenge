@@ -1,4 +1,4 @@
-"""GeminiQueryClassifier: LLM-based query classification via Gemini Flash.
+"""GeminiQueryClassifier: LLM-based query classification via OpenRouter.
 
 Implements the Classifier protocol. Classifies search queries into one of
 five types (visual, audio, transcript, temporal, mixed) and returns locked
@@ -12,8 +12,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from google import genai
-from google.genai import types
+import httpx
 
 from videosearch.config import Settings
 
@@ -69,16 +68,22 @@ WEIGHT_POLICY: dict[str, dict[str, float]] = {
 
 
 class GeminiQueryClassifier:
-    """Query classifier using Gemini Flash via Google GenAI SDK.
+    """Query classifier using OpenRouter chat completions API.
 
     Satisfies the Classifier protocol. Uses disk cache keyed by
     SHA-256 hash of the normalized query string. The LLM determines
     query_type only; weight values are locked in WEIGHT_POLICY.
+
+    Note: Class retains its original name for backwards compatibility with
+    CLI and retriever imports, even though it now uses OpenRouter exclusively.
     """
 
     def __init__(self, settings: Settings) -> None:
-        self._client = genai.Client(api_key=settings.google_api_key)
-        self._model = settings.classifier_model
+        self._openrouter_key = settings.openrouter_api_key
+        self._model = settings.classifier_model  # e.g. "google/gemini-2.0-flash"
+        # Ensure model has provider prefix for OpenRouter
+        if "/" not in self._model:
+            self._model = f"google/{self._model}"
         self._cache_dir = Path(settings.classifier_cache_dir)
 
     def classify(self, query: str) -> dict:
@@ -98,24 +103,7 @@ class GeminiQueryClassifier:
         if cached is not None:
             return {"query_type": cached["query_type"], "weights": cached["weights"]}
 
-        try:
-            response = self._client.models.generate_content(
-                model=self._model,
-                contents=[f'Classify this query: "{query}"'],
-                config=types.GenerateContentConfig(
-                    system_instruction=CLASSIFIER_SYSTEM_PROMPT,
-                    response_mime_type="application/json",
-                    temperature=0.0,
-                ),
-            )
-            parsed = json.loads(response.text)
-            query_type = parsed.get("query_type", "mixed")
-        except Exception:
-            logger.warning(
-                "Classifier failed, falling back to mixed weights",
-                exc_info=True,
-            )
-            query_type = "mixed"
+        query_type = self._classify_via_api(query)
 
         # Override LLM-returned weights with locked policy values
         if query_type not in WEIGHT_POLICY:
@@ -125,6 +113,41 @@ class GeminiQueryClassifier:
         result = {"query_type": query_type, "weights": weights}
         self._save_cache(key, result)
         return result
+
+    def _classify_via_api(self, query: str) -> str:
+        """Classify query via OpenRouter, falling back to heuristic on failure."""
+        try:
+            response = httpx.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self._openrouter_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self._model,
+                    "messages": [
+                        {"role": "system", "content": CLASSIFIER_SYSTEM_PROMPT},
+                        {"role": "user", "content": f'Classify this query: "{query}"'},
+                    ],
+                    "temperature": 0.0,
+                    "response_format": {"type": "json_object"},
+                },
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            if "error" in data:
+                raise RuntimeError(f"OpenRouter error: {data['error']}")
+            if "choices" not in data or not data["choices"]:
+                raise RuntimeError(f"OpenRouter response missing choices: {list(data.keys())}")
+
+            content = data["choices"][0]["message"]["content"]
+            parsed = json.loads(content)
+            return parsed.get("query_type", "mixed")
+        except Exception:
+            logger.warning("Classifier failed, falling back to mixed weights", exc_info=True)
+            return "mixed"
 
     def _cache_key(self, query: str) -> str:
         """Compute cache key from normalized query."""

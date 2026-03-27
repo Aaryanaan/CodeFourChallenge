@@ -1,22 +1,25 @@
-"""GeminiCaptioner: visual captioning via Gemini Flash with disk cache.
+"""GeminiCaptioner: visual captioning via OpenRouter with disk cache.
 
-Implements the Captioner protocol. Uses a cache-first flow: checks disk
-before making any API call. On cache miss, extracts a clip via ffmpeg,
-uploads to Google Files API, calls generate_content, then cleans up.
+Uses OpenRouter chat completions API with base64-encoded video clips.
+Cache-first flow: checks disk before making any API call. On cache miss,
+extracts a clip via ffmpeg, sends to OpenRouter, then cleans up.
 """
 
+import base64
 import json
+import logging
 import os
 import subprocess
 import tempfile
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from google import genai
+import httpx
 
 from videosearch.config import Settings
+
+logger = logging.getLogger(__name__)
 
 
 CAPTION_SYSTEM_PROMPT = """You are analyzing body-worn camera footage for a law enforcement video search system.
@@ -40,18 +43,26 @@ Text:
 Lighting:"""
 
 
+class QuotaExhaustedError(Exception):
+    """Raised when the API quota is exhausted -- caller should stop sending requests."""
+
+
 class GeminiCaptioner:
-    """Visual captioner using Gemini Flash via Google GenAI SDK.
+    """Visual captioner using OpenRouter API.
 
     Satisfies the Captioner protocol. Uses disk cache to avoid redundant
-    API calls. Handles ffmpeg clip extraction and Files API lifecycle
-    (upload + delete) with cleanup even on error.
+    API calls. Handles ffmpeg clip extraction and cleanup even on error.
+
+    Note: Class retains its original name for backwards compatibility with
+    CLI and ingestion imports, even though it now uses OpenRouter exclusively.
     """
 
     def __init__(self, settings: Settings) -> None:
-        self._client = genai.Client(api_key=settings.google_api_key)
-        # Strip OpenRouter prefix if present (google/ prefix is not valid for native SDK)
-        self._model = settings.captioner_model.replace("google/", "")
+        self._openrouter_key = settings.openrouter_api_key
+        self._model = settings.captioner_model  # e.g. "google/gemini-2.5-flash"
+        # Ensure model has provider prefix for OpenRouter
+        if "/" not in self._model:
+            self._model = f"google/{self._model}"
         self._cache_dir = settings.caption_cache_dir
         self._ffmpeg_path = settings.ffmpeg_path
 
@@ -85,31 +96,72 @@ class GeminiCaptioner:
         if cached_text is not None:
             return {"caption": cached_text, "cached": True}
 
+        if not self._openrouter_key:
+            raise QuotaExhaustedError(
+                "No OpenRouter API key configured -- cannot caption"
+            )
+
         # Extract clip to temp file
         clip_path = self._extract_clip(video_path, start, end)
         try:
-            # Upload and wait for Files API to finish processing
-            uploaded = self._client.files.upload(file=clip_path)
-            while uploaded.state.name == "PROCESSING":
-                time.sleep(1)
-                uploaded = self._client.files.get(name=uploaded.name)
-            if uploaded.state.name == "FAILED":
-                raise RuntimeError(f"Files API upload failed for clip: {clip_path}")
-            try:
-                response = self._client.models.generate_content(
-                    model=self._model,
-                    contents=[CAPTION_SYSTEM_PROMPT, uploaded, CAPTION_USER_PROMPT],
-                )
-                caption_text = response.text
-            finally:
-                # Always delete uploaded file
-                self._client.files.delete(name=uploaded.name)
+            caption_text = self._call_openrouter(clip_path)
         finally:
-            # Always delete temp clip
             os.unlink(clip_path)
+
+        if not caption_text:
+            raise RuntimeError(f"API returned empty/null caption for chunk {chunk_index}")
 
         self._save_cache(video_id, chunk_index, caption_text)
         return {"caption": caption_text, "cached": False}
+
+    def _call_openrouter(self, clip_path: str) -> str:
+        """Caption via OpenRouter with base64-encoded video clip."""
+        video_bytes = Path(clip_path).read_bytes()
+        video_b64 = base64.b64encode(video_bytes).decode()
+        data_url = f"data:video/mp4;base64,{video_b64}"
+
+        response = httpx.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self._openrouter_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": self._model,
+                "messages": [
+                    {"role": "system", "content": CAPTION_SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "video_url",
+                                "video_url": {"url": data_url},
+                            },
+                            {
+                                "type": "text",
+                                "text": CAPTION_USER_PROMPT,
+                            },
+                        ],
+                    },
+                ],
+                "temperature": 0.0,
+            },
+            timeout=90.0,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        if "error" in data:
+            error_msg = data["error"]
+            if isinstance(error_msg, dict):
+                error_msg = error_msg.get("message", str(error_msg))
+            if "429" in str(error_msg) or "quota" in str(error_msg).lower():
+                raise QuotaExhaustedError(f"OpenRouter quota exhausted: {error_msg}")
+            raise RuntimeError(f"OpenRouter error: {error_msg}")
+        if "choices" not in data or not data["choices"]:
+            raise RuntimeError(f"OpenRouter response missing choices: {list(data.keys())}")
+
+        return data["choices"][0]["message"]["content"]
 
     def _extract_clip(self, video_path: str, start: float, end: float) -> str:
         """Extract a video clip using ffmpeg.
@@ -124,9 +176,6 @@ class GeminiCaptioner:
         """
         fd, tmp_path = tempfile.mkstemp(suffix=".mp4")
         os.close(fd)
-        # Use -ss after -i for frame-accurate seeking. Re-encode is needed
-        # because stream copy (-c copy) snaps to the nearest keyframe, which
-        # can send wrong frames to the captioning model near chunk boundaries.
         subprocess.run(
             [
                 self._ffmpeg_path,
@@ -143,6 +192,10 @@ class GeminiCaptioner:
         )
         return tmp_path
 
+    def is_cached(self, video_id: str, chunk_index: int) -> bool:
+        """Check if a valid (non-null) cache entry exists for a chunk."""
+        return self._load_cache(video_id, chunk_index) is not None
+
     def _cache_path(self, video_id: str, chunk_index: int) -> Path:
         """Return the cache file path for a given video/chunk."""
         return Path(self._cache_dir) / video_id / f"{chunk_index}.json"
@@ -151,20 +204,21 @@ class GeminiCaptioner:
         """Load a cached caption if it exists.
 
         Returns:
-            Cached caption string, or None if no cache entry.
+            Cached caption string, or None if no cache entry or if the cached
+            value is null/empty (invalid cache entry).
         """
         path = self._cache_path(video_id, chunk_index)
         if path.exists():
             data = json.loads(path.read_text())
-            return data["caption"]
+            caption = data.get("caption")
+            if not caption:
+                path.unlink(missing_ok=True)
+                return None
+            return caption
         return None
 
     def _save_cache(self, video_id: str, chunk_index: int, caption: str) -> None:
-        """Write a caption to the disk cache.
-
-        Creates parent directories as needed. Writes JSON with keys:
-        "caption", "model", "cached_at".
-        """
+        """Write a caption to the disk cache."""
         path = self._cache_path(video_id, chunk_index)
         path.parent.mkdir(parents=True, exist_ok=True)
         cache_data = {

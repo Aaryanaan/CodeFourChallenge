@@ -38,14 +38,19 @@ class LanceVectorStore:
         self._lancedb_dir = self._index_dir / "lancedb"
         self._lancedb_dir.mkdir(parents=True, exist_ok=True)
         self._db = lancedb.connect(str(self._lancedb_dir))
+        self._vector_dim = vector_dim
         self._schema = _chunks_schema(vector_dim)
         self._table = None
 
     def _get_table(self):
         if self._table is None:
-            self._table = self._db.create_table(
-                "chunks", schema=self._schema, exist_ok=True
-            )
+            if "chunks" in self._db.table_names():
+                # Open existing table (may have different vector dim than config)
+                self._table = self._db.open_table("chunks")
+            else:
+                self._table = self._db.create_table(
+                    "chunks", schema=self._schema, exist_ok=True
+                )
         return self._table
 
     def upsert(self, rows: list[dict]) -> None:
@@ -62,6 +67,17 @@ class LanceVectorStore:
     def count(self) -> int:
         """Return the number of rows in the vector store."""
         return self._get_table().count_rows()
+
+    def stored_vector_dim(self) -> int | None:
+        """Return the vector dimension of the stored table, or None if empty."""
+        if "chunks" not in self._db.table_names():
+            return None
+        table = self._get_table()
+        schema = table.schema
+        for field in schema:
+            if field.name == "vector":
+                return field.type.list_size
+        return None
 
     def count_by_video(self, video_id: str) -> int:
         """Count existing rows for a video_id. Used for incremental skip detection (IDX-05)."""

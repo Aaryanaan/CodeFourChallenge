@@ -128,3 +128,4 @@ def test_caption_settings_defaults():
     assert settings.caption_cost_ceiling == 5.0
     assert str(settings.caption_cache_dir) == "data/cache/captions"
     assert settings.caption_cost_per_chunk == 0.003
+    assert settings.total_budget_ceiling == 30.0

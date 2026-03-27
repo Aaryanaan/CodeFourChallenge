@@ -84,18 +84,25 @@ class IndexBuilder:
     def __init__(self, settings: Settings | None = None):
         self._settings = settings or Settings()
         self._embedder = GeminiEmbedder(self._settings)
-        self._vector_store = LanceVectorStore(
-            index_dir=self._settings.index_dir,
-            vector_dim=self._settings.embedding_dimensions,
-        )
+        self._vector_store: LanceVectorStore | None = None
         self._bm25_store = BM25Store()
         self._metadata_writer = MetadataWriter(
             metadata_dir=self._settings.metadata_dir
         )
 
+    def _get_vector_store(self, vector_dim: int | None = None) -> LanceVectorStore:
+        """Get or create the vector store with the correct dimensions."""
+        dim = vector_dim or self._settings.embedding_dimensions
+        if self._vector_store is None or self._vector_store._vector_dim != dim:
+            self._vector_store = LanceVectorStore(
+                index_dir=self._settings.index_dir,
+                vector_dim=dim,
+            )
+        return self._vector_store
+
     def _is_video_indexed(self, video_id: str, expected_chunks: int) -> bool:
         """Check if video already has expected number of rows in vector store (D-05)."""
-        existing = self._vector_store.count_by_video(video_id)
+        existing = self._get_vector_store().count_by_video(video_id)
         return existing == expected_chunks
 
     def build_index(self, video_ids: list[str], force: bool = False) -> dict:
@@ -133,42 +140,83 @@ class IndexBuilder:
         )
 
         # Step 3: Batch embed
+        # Check existing table dimension to detect incompatible embedder switch
+        embedding_failed = False
+        if not force:
+            stored_dim = self._get_vector_store().stored_vector_dim()
+            embed_dim = self._embedder.dimensions
+            if stored_dim is not None and stored_dim != embed_dim:
+                logger.warning(
+                    "Embedder dimension (%d) differs from stored index (%d) — "
+                    "rebuilding index requires --force to avoid mixed dimensions. "
+                    "Skipping vector update.",
+                    embed_dim, stored_dim,
+                )
+                embedding_failed = True
+
         batch_size = self._settings.embedding_batch_size
         all_embeddings: list[list[float]] = []
         texts = [text for _, text in rows_to_embed]
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i : i + batch_size]
-            embeddings = self._embedder.embed_batch(batch)
-            all_embeddings.extend(embeddings)
-            logger.info("Embedded batch %d-%d", i, i + len(batch))
+        if not embedding_failed:
+            for i in range(0, len(texts), batch_size):
+                batch = texts[i : i + batch_size]
+                try:
+                    embeddings = self._embedder.embed_batch(batch)
+                    # Validate dimension consistency within batch
+                    if all_embeddings and len(embeddings[0]) != len(all_embeddings[0]):
+                        logger.warning(
+                            "Embedding dimension changed mid-batch (%d -> %d) — "
+                            "aborting vector index to prevent corruption",
+                            len(all_embeddings[0]), len(embeddings[0]),
+                        )
+                        embedding_failed = True
+                        all_embeddings.clear()
+                        break
+                    all_embeddings.extend(embeddings)
+                    logger.info("Embedded batch %d-%d", i, i + len(batch))
+                except Exception as e:
+                    if "RESOURCE_EXHAUSTED" in str(e) or "429" in str(e):
+                        logger.warning(
+                            "Gemini embedding quota exhausted at batch %d — "
+                            "skipping vector index update, BM25 will still be rebuilt",
+                            i,
+                        )
+                        embedding_failed = True
+                        all_embeddings.clear()
+                        break
+                    raise
 
-        # Step 4: Build rows and upsert
-        vector_rows = []
-        for idx, (chunk, combined) in enumerate(rows_to_embed):
-            row = {
-                "vector": all_embeddings[idx],
-                "video_id": chunk.video_id,
-                "chunk_index": chunk.chunk_index,
-                "start_time": chunk.start_time,
-                "end_time": chunk.end_time,
-                "duration": chunk.duration,
-                "combined_text": combined,
-                "volume_level": compute_volume_level(
-                    chunk, all_chunks, self._settings.raised_voice_stddev_threshold
-                ),
-                "has_speech": bool(chunk.transcript),  # D-06
-                "has_ocr": bool(chunk.ocr_results),     # D-06
-                "has_raised_voice": (
-                    chunk.audio_features.has_raised_voice
-                    if chunk.audio_features else False
-                ),  # D-06
-                "scene_type": chunk.scene_type,
-            }
-            vector_rows.append(row)
+        # Step 4: Build rows and upsert (skip if embedding failed or dim mismatch)
+        if not embedding_failed and all_embeddings:
+            actual_dim = len(all_embeddings[0])
+            vector_rows = []
+            for idx, (chunk, combined) in enumerate(rows_to_embed):
+                row = {
+                    "vector": all_embeddings[idx],
+                    "video_id": chunk.video_id,
+                    "chunk_index": chunk.chunk_index,
+                    "start_time": chunk.start_time,
+                    "end_time": chunk.end_time,
+                    "duration": chunk.duration,
+                    "combined_text": combined,
+                    "volume_level": compute_volume_level(
+                        chunk, all_chunks, self._settings.raised_voice_stddev_threshold
+                    ),
+                    "has_speech": bool(chunk.transcript),  # D-06
+                    "has_ocr": bool(chunk.ocr_results),     # D-06
+                    "has_raised_voice": (
+                        chunk.audio_features.has_raised_voice
+                        if chunk.audio_features else False
+                    ),  # D-06
+                    "scene_type": chunk.scene_type,
+                }
+                vector_rows.append(row)
 
-        if vector_rows:
-            self._vector_store.upsert(vector_rows)
-            logger.info("Upserted %d rows to vector store", len(vector_rows))
+            if vector_rows:
+                self._get_vector_store(vector_dim=actual_dim).upsert(vector_rows)
+                logger.info("Upserted %d rows to vector store", len(vector_rows))
+        else:
+            logger.info("Vector store unchanged (embedding quota exhausted)")
 
         # Step 5: Build BM25 index — always over the FULL corpus.
         # BM25 is rebuilt from scratch each time, so it must include every

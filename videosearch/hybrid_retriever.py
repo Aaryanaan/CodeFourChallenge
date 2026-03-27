@@ -89,6 +89,12 @@ class HybridRetriever:
         self._bm25_store = BM25Store()
         self._bm25_loaded = False
 
+        # If vector index was built with local embeddings (384-dim),
+        # force the embedder to use local too so dimensions match.
+        stored_dim = self._vector_store.stored_vector_dim()
+        if stored_dim is not None and stored_dim != settings.embedding_dimensions:
+            self._embedder._use_local = True
+
         bm25_path = settings.index_dir / "bm25.pkl"
         if bm25_path.exists():
             self._bm25_store.load(bm25_path)
@@ -120,10 +126,10 @@ class HybridRetriever:
         """
         RERANK_POOL = 20  # wider pool for reranker input; output capped at top_k
 
-        # Preflight: catch empty/missing index before spending an API call on embedding
-        if self._vector_store.count() == 0:
+        # Preflight: at least one index must be available
+        if self._vector_store.count() == 0 and not self._bm25_loaded:
             raise RuntimeError(
-                "Vector index is empty — run `videosearch index` first."
+                "No index available — run `videosearch index` first."
             )
 
         # Step 1: Classify query (or fall back to heuristic)
@@ -141,30 +147,48 @@ class HybridRetriever:
         # Step 2: Retrieve from all paths (wider fetch when reranker present)
         fetch_k = max(top_k * 3, RERANK_POOL) if self._reranker else top_k * 2
 
-        query_vector = self._embedder.embed_query(query)
-        vector_results = self._vector_store.search(query_vector, top_k=fetch_k)
+        # Vector path (gracefully degrade on Gemini quota exhaustion)
+        vector_results: list[dict] = []
+        query_vector: list[float] | None = None
+        try:
+            query_vector = self._embedder.embed_query(query)
+            vector_results = self._vector_store.search(query_vector, top_k=fetch_k)
+        except Exception as e:
+            if "RESOURCE_EXHAUSTED" in str(e) or "429" in str(e):
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Gemini embedding quota exhausted — falling back to BM25-only retrieval"
+                )
+            else:
+                raise
 
         # BM25 path (skipped gracefully if index was never built)
         bm25_results: list[dict] = []
         if self._bm25_loaded:
             bm25_results = self._bm25_store.search(query, top_k=fetch_k)
 
-        # Filter path (conditional)
+        # Filter path (conditional — requires a query vector)
         filter_results: list[dict] = []
-        if filter_expr is not None:
+        if filter_expr is not None and query_vector is not None:
             filter_results = self._vector_store.search(
                 query_vector, top_k=fetch_k, filter_expr=filter_expr
             )
 
         # Step 3: Build ranked lists and active weights for RRF
-        lists: list[list[dict]] = [vector_results]
-        active_weights: list[float] = [weights[0]]
+        lists: list[list[dict]] = []
+        active_weights: list[float] = []
+        if vector_results:
+            lists.append(vector_results)
+            active_weights.append(weights[0])
         if bm25_results:
             lists.append(bm25_results)
             active_weights.append(weights[1])
         if filter_results:
             lists.append(filter_results)
             active_weights.append(weights[2])
+
+        if not lists:
+            return []
 
         fused = reciprocal_rank_fusion(lists, active_weights)
 

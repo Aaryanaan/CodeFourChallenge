@@ -72,16 +72,15 @@ class IngestionPipeline:
           3. Run transcription, audio analysis, OCR (and optionally captioning) per chunk
           4. Two-pass raised voice detection
           5. Write metadata JSON
-          6. (Optional) Generate visual captions if include_caption=True
 
         Args:
             video_path: Absolute or relative path to the source video.
-            include_caption: When True, run visual captioner as 4th parallel task.
+            include_caption: When True, run visual captioner as 4th parallel task in step 3.
 
         Returns:
             video_id derived from the video filename stem (e.g. "bodycam_001").
         """
-        video_id = Path(video_path).stem
+        video_id = Path(video_path).stem.replace("_720p", "")
 
         # Step 1: Compress
         compressed_dir = self._settings.video_dir / "compressed"
@@ -114,26 +113,8 @@ class IngestionPipeline:
                     )
                 )
 
-        # Step 5: Write metadata
+        # Step 5: Write metadata (captions already populated by _extract_chunk when include_caption=True)
         self._metadata_writer.write(video_id, chunks)
-
-        # Step 6: Optional visual captioning (D-02)
-        if include_caption:
-            from videosearch.captioner import GeminiCaptioner
-
-            captioner = GeminiCaptioner(self._settings)
-            for chunk in chunks:
-                try:
-                    result = captioner.caption(
-                        compressed_path, chunk.start_time, chunk.end_time, chunk.chunk_index
-                    )
-                    chunk.visual_caption = result["caption"]
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(
-                        "Caption failed for chunk %d: %s", chunk.chunk_index, e
-                    )
-            # Re-write metadata with captions
-            self._metadata_writer.write(video_id, chunks)
 
         return video_id
 

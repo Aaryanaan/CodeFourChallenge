@@ -64,6 +64,6 @@ class Settings(BaseSettings):
     total_budget_ceiling: float = 30.0  # Total budget for multi-video captioning
 
     # Query Intelligence (Phase 6)
-    classifier_model: str = "gemini-2.0-flash"  # Google AI SDK model ID (no google/ prefix)
+    classifier_model: str = "google/gemini-2.0-flash"  # OpenRouter model ID
     classifier_cache_dir: Path = Path("data/cache/classifier")
     reranker_cache_dir: Path = Path("data/cache/reranker")

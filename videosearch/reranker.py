@@ -105,6 +105,19 @@ class ClaudeReranker:
 
             response.raise_for_status()
             data = response.json()
+
+            # Validate response structure — OpenRouter can return 200 with
+            # an error body (e.g. {"error": {...}}) when auth fails or
+            # upstream model is unavailable.
+            if "error" in data:
+                raise RuntimeError(
+                    f"OpenRouter returned error: {data['error']}"
+                )
+            if "choices" not in data or not data["choices"]:
+                raise RuntimeError(
+                    f"OpenRouter response missing 'choices': {list(data.keys())}"
+                )
+
             content = data["choices"][0]["message"]["content"]
 
             # Strip markdown fences if present
