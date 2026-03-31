@@ -166,13 +166,29 @@ class IndexBuilder:
                     embeddings = self._embedder.embed_batch(batch)
                     # Validate dimension consistency within batch
                     if all_embeddings and len(embeddings[0]) != len(all_embeddings[0]):
-                        logger.warning(
-                            "Embedding dimension changed mid-batch (%d -> %d) — "
-                            "aborting vector index to prevent corruption",
-                            len(all_embeddings[0]), len(embeddings[0]),
-                        )
-                        embedding_failed = True
-                        all_embeddings.clear()
+                        if force:
+                            # Gemini processed some batches then quota hit mid-run.
+                            # With --force, restart everything using local embedder.
+                            logger.warning(
+                                "Embedding dimension changed mid-batch (%d -> %d) — "
+                                "restarting all embeddings with local embedder (--force)",
+                                len(all_embeddings[0]), len(embeddings[0]),
+                            )
+                            self._embedder._use_local = True
+                            all_embeddings.clear()
+                            for j in range(0, len(texts), batch_size):
+                                all_embeddings.extend(
+                                    self._embedder.embed_batch(texts[j : j + batch_size])
+                                )
+                                logger.info("Re-embedded batch %d-%d (local)", j, j + batch_size)
+                        else:
+                            logger.warning(
+                                "Embedding dimension changed mid-batch (%d -> %d) — "
+                                "aborting vector index to prevent corruption",
+                                len(all_embeddings[0]), len(embeddings[0]),
+                            )
+                            embedding_failed = True
+                            all_embeddings.clear()
                         break
                     all_embeddings.extend(embeddings)
                     logger.info("Embedded batch %d-%d", i, i + len(batch))
@@ -196,7 +212,7 @@ class IndexBuilder:
         # LanceDB table crashes at the Arrow schema level, so we abort instead.
         if not embedding_failed and all_embeddings:
             actual_dim = len(all_embeddings[0])
-            if stored_dim is not None and stored_dim != actual_dim:
+            if not force and stored_dim is not None and stored_dim != actual_dim:
                 logger.warning(
                     "Embedder fell back to local (%d-dim) but stored index is %d-dim — "
                     "run `videosearch index --force` to rebuild from scratch. "
@@ -231,7 +247,10 @@ class IndexBuilder:
                 vector_rows.append(row)
 
             if vector_rows:
-                self._get_vector_store(vector_dim=actual_dim).upsert(vector_rows)
+                vs = self._get_vector_store(vector_dim=actual_dim)
+                if force:
+                    vs.clear()
+                vs.upsert(vector_rows)
                 logger.info("Upserted %d rows to vector store", len(vector_rows))
         else:
             logger.info("Vector store unchanged (embedding quota exhausted)")

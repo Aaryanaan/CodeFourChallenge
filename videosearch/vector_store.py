@@ -54,6 +54,12 @@ class LanceVectorStore:
                 )
         return self._table
 
+    def clear(self) -> None:
+        """Drop and recreate the chunks table, applying the current schema."""
+        if "chunks" in self._db.table_names():
+            self._db.drop_table("chunks")
+        self._table = None
+
     def upsert(self, rows: list[dict]) -> None:
         """Upsert rows by compound key (video_id, chunk_index) per D-04/D-13."""
         table = self._get_table()
