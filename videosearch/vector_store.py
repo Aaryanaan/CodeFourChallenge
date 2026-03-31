@@ -18,7 +18,8 @@ def _chunks_schema(dim: int = _DEFAULT_VECTOR_DIM) -> pa.Schema:
         pa.field("end_time", pa.float64()),
         pa.field("duration", pa.float64()),
         pa.field("combined_text", pa.string()),
-        pa.field("volume_level", pa.string()),   # "quiet" | "normal" | "loud" (D-05)
+        pa.field("visual_caption", pa.string()),  # stored separately for display
+        pa.field("volume_level", pa.string()),    # "quiet" | "normal" | "loud" (D-05)
         pa.field("has_speech", pa.bool_()),       # (D-06)
         pa.field("has_ocr", pa.bool_()),          # (D-06)
         pa.field("has_raised_voice", pa.bool_()), # (D-06)

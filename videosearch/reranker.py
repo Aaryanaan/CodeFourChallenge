@@ -176,13 +176,10 @@ class ClaudeReranker:
                 candidate["reasoning"] = entry.get("reasoning", "")
                 result.append(candidate)
 
-        # If rankings didn't cover all candidates, append remaining
-        seen = {r.get("chunk_id") for r in rankings}
-        for c in candidates:
-            cid = f"{c['video_id']}:{c['chunk_index']}"
-            if cid not in seen:
-                result.append(c)
-
+        # Do NOT append un-ranked candidates here. The reranker explicitly
+        # excludes irrelevant chunks ("no relevance to the query, exclude it").
+        # Padding with excluded chunks produces results with no reasoning that
+        # are irrelevant by design — worse than returning fewer results.
         return result[:top_k]
 
     def _cache_key(self, query: str, candidates: list[dict]) -> str:

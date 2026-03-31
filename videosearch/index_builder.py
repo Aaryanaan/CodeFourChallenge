@@ -216,6 +216,7 @@ class IndexBuilder:
                     "end_time": chunk.end_time,
                     "duration": chunk.duration,
                     "combined_text": combined,
+                    "visual_caption": chunk.visual_caption or "",
                     "volume_level": compute_volume_level(
                         chunk, all_chunks, self._settings.raised_voice_stddev_threshold
                     ),

@@ -405,7 +405,14 @@ def _print_results(results: list[dict], query: str) -> None:
 
         score_line = f"[bold]Score:[/bold] {r.get('rrf_score', 0):.4f}"
         transcript = r.get("transcript_snippet", r.get("combined_text", ""))[:200]
-        caption = r.get("visual_caption", "")[:200]
+        # visual_caption stored as dedicated field (new index); fall back to
+        # parsing from combined_text for indexes built before this field existed.
+        caption = r.get("visual_caption") or ""
+        if not caption:
+            combined = r.get("combined_text", "")
+            if "\nCaption: " in combined:
+                caption = combined.split("\nCaption: ", 1)[1]
+        caption = caption[:200]
         reasoning = r.get("reasoning", "N/A")
 
         body = (
