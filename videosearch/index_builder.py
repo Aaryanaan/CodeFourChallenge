@@ -140,10 +140,12 @@ class IndexBuilder:
         )
 
         # Step 3: Batch embed
-        # Check existing table dimension to detect incompatible embedder switch
+        # Check existing table dimension to detect incompatible embedder switch.
+        # stored_dim is also used post-embedding in Step 4 to catch the case where
+        # the embedder silently fell back to local (384-dim) during the first batch.
         embedding_failed = False
+        stored_dim = self._get_vector_store().stored_vector_dim()
         if not force:
-            stored_dim = self._get_vector_store().stored_vector_dim()
             embed_dim = self._embedder.dimensions
             if stored_dim is not None and stored_dim != embed_dim:
                 logger.warning(
@@ -186,7 +188,22 @@ class IndexBuilder:
                         break
                     raise
 
-        # Step 4: Build rows and upsert (skip if embedding failed or dim mismatch)
+        # Step 4: Build rows and upsert (skip if embedding failed or dim mismatch).
+        # Re-check dimensions here: the pre-check above uses self._embedder.dimensions
+        # (the configured value, 768) before any API call is made. If the embedder
+        # silently fell back to local (384-dim) mid-session due to a 429, actual_dim
+        # will differ from stored_dim. Upserting mismatched vectors into an existing
+        # LanceDB table crashes at the Arrow schema level, so we abort instead.
+        if not embedding_failed and all_embeddings:
+            actual_dim = len(all_embeddings[0])
+            if stored_dim is not None and stored_dim != actual_dim:
+                logger.warning(
+                    "Embedder fell back to local (%d-dim) but stored index is %d-dim — "
+                    "run `videosearch index --force` to rebuild from scratch. "
+                    "BM25 updated; vector search uses existing index.",
+                    actual_dim, stored_dim,
+                )
+                embedding_failed = True
         if not embedding_failed and all_embeddings:
             actual_dim = len(all_embeddings[0])
             vector_rows = []
