@@ -46,8 +46,22 @@ videosearch batch-eval
 
 # 4. Optional: start the API server
 videosearch serve
-# then open http://127.0.0.1:8000/docs
 ```
+
+Then use the Swagger UI to run queries in the browser:
+
+1. Open http://127.0.0.1:8000/docs
+2. Click **POST /search** to expand it
+3. Click **Try it out**
+4. Replace the request body with:
+   ```json
+   {
+     "query": "Find all interactions where an officer reads Miranda rights",
+     "top_k": 5
+   }
+   ```
+5. Click **Execute**
+6. The response body contains ranked results with `video_id`, `start_time`, `end_time`, `score`, `transcript_snippet`, `visual_caption`, and `reasoning`.
 
 ## Full Pipeline: Ingest Your Own Videos
 
